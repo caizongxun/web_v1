@@ -37,12 +37,17 @@ class ChartGenerator:
         n = len(prices)
         labels = [f'K{i+1}' for i in range(n)] + ['K+1']
         
-        # Prepare data
+        # Prepare data - extend historical prices with current and predicted
+        # Historical data remains the same, prediction connects from last point
         price_data = list(prices) + [predicted_price]
         
         # Calculate moving averages
-        ma7 = ChartGenerator._calculate_ma(prices, 7) + [np.nan]
-        ma21 = ChartGenerator._calculate_ma(prices, 21) + [np.nan]
+        ma7 = ChartGenerator._calculate_ma(prices, 7)
+        ma21 = ChartGenerator._calculate_ma(prices, 21)
+        
+        # Extend MA data to match full dataset length (with NaN for prediction point)
+        ma7_full = ma7 + [np.nan]
+        ma21_full = ma21 + [np.nan]
         
         # HTML with Chart.js
         html = f"""
@@ -233,12 +238,8 @@ class ChartGenerator:
         const ctx = document.getElementById('priceChart').getContext('2d');
         const labels = {json.dumps(labels)};
         const priceData = {json.dumps(price_data)};
-        const ma7Data = {json.dumps([None if np.isnan(x) else float(x) for x in ma7])};
-        const ma21Data = {json.dumps([None if np.isnan(x) else float(x) for x in ma21])};
-        
-        // Separate historical and predicted
-        const historicalIndices = Array.from({{length: {n}}}, (_, i) => i);
-        const predictedIndex = {n};
+        const ma7Data = {json.dumps([None if np.isnan(x) else float(x) for x in ma7_full])};
+        const ma21Data = {json.dumps([None if np.isnan(x) else float(x) for x in ma21_full])};
         
         const chart = new Chart(ctx, {{
             type: 'line',
@@ -247,7 +248,7 @@ class ChartGenerator:
                 datasets: [
                     {{
                         label: 'Historical Price',
-                        data: priceData.slice(0, {n}),
+                        data: priceData.slice(0, -1),  // Only historical data
                         borderColor: '#a855f7',
                         backgroundColor: 'rgba(168, 85, 247, 0.1)',
                         borderWidth: 3,
@@ -258,25 +259,22 @@ class ChartGenerator:
                         pointHoverRadius: 6,
                         tension: 0.4,
                         fill: true,
-                        segment: {{
-                            borderColor: (ctx) => ctx.p0DataIndex === {n - 1} ? 'rgba(168, 85, 247, 0.3)' : '#a855f7'
-                        }}
+                        spanGaps: false
                     }},
                     {{
                         label: 'Predicted Price',
-                        data: [{json.dumps(prices[-1])}, {json.dumps(predicted_price)}],
+                        data: priceData.slice({n - 1}),  // Last two points: current price + predicted price
                         borderColor: '#06b6d4',
                         backgroundColor: 'rgba(6, 182, 212, 0.05)',
                         borderWidth: 3,
                         borderDash: [5, 5],
-                        pointRadius: 6,
+                        pointRadius: [0, 6],  // Only show point for predicted value
                         pointBackgroundColor: '#0891b2',
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 8,
                         tension: 0.4,
                         fill: false,
-                        xAxisID: 'x',
                         spanGaps: false
                     }},
                     {{
