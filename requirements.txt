@@ -13,6 +13,7 @@ xgboost==2.0.0
 # Data Fetching
 requests==2.31.0
 python-binance==1.0.17
+yfinance==0.2.32
 
 # Database (Optional)
 sqlalchemy==2.0.20
