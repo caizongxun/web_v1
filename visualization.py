@@ -4,7 +4,7 @@ Price Prediction Visualization Module
 Provides improved chart generation for prediction results
 
 Features:
-- Smooth line rendering
+- Direct line rendering (no smoothing)
 - Better color schemes
 - Proper legend positioning
 - Technical indicators overlay
@@ -37,17 +37,20 @@ class ChartGenerator:
         n = len(prices)
         labels = [f'K{i+1}' for i in range(n)] + ['K+1']
         
-        # Prepare data - extend historical prices with current and predicted
-        # Historical data remains the same, prediction connects from last point
-        price_data = list(prices) + [predicted_price]
+        # Current price (last price point)
+        current_price = prices[-1]
+        
+        # Prepare historical and predicted data separately (NO smoothing)
+        historical_prices = list(prices)
+        predicted_prices = [None] * (n - 1) + [current_price, predicted_price]
         
         # Calculate moving averages
         ma7 = ChartGenerator._calculate_ma(prices, 7)
         ma21 = ChartGenerator._calculate_ma(prices, 21)
         
-        # Extend MA data to match full dataset length (with NaN for prediction point)
-        ma7_full = ma7 + [np.nan]
-        ma21_full = ma21 + [np.nan]
+        # Extend MA data to match full dataset length (with None for prediction point)
+        ma7_full = ma7 + [None]
+        ma21_full = ma21 + [None]
         
         # HTML with Chart.js
         html = f"""
@@ -213,22 +216,22 @@ class ChartGenerator:
         <div class="info-grid">
             <div class="info-card">
                 <div class="label">Current Price</div>
-                <div class="value">${{prices[-1]:,.2f}}</div>
+                <div class="value">${{{current_price}:,.2f}}</div>
             </div>
             <div class="info-card">
                 <div class="label">Predicted Price</div>
-                <div class="value">${{predicted_price:,.2f}}</div>
+                <div class="value">${{{predicted_price}:,.2f}}</div>
             </div>
             <div class="info-card">
                 <div class="label">Change Direction</div>
-                <div class="value" style="color: {('#06b6d4' if predicted_price > prices[-1] else '#ef4444')}">
-                    {('↑ UP' if predicted_price > prices[-1] else '↓ DOWN')}
+                <div class="value" style="color: {('#06b6d4' if predicted_price > current_price else '#ef4444')}">
+                    {('↑ UP' if predicted_price > current_price else '↓ DOWN')}
                 </div>
             </div>
             <div class="info-card">
                 <div class="label">Change Percent</div>
-                <div class="value" style="color: {('#06b6d4' if predicted_price > prices[-1] else '#ef4444')}">
-                    {abs((predicted_price - prices[-1]) / prices[-1] * 100):.2f}%
+                <div class="value" style="color: {('#06b6d4' if predicted_price > current_price else '#ef4444')}">
+                    {abs((predicted_price - current_price) / current_price * 100):.2f}%
                 </div>
             </div>
         </div>
@@ -237,9 +240,10 @@ class ChartGenerator:
     <script>
         const ctx = document.getElementById('priceChart').getContext('2d');
         const labels = {json.dumps(labels)};
-        const priceData = {json.dumps(price_data)};
-        const ma7Data = {json.dumps([None if np.isnan(x) else float(x) for x in ma7_full])};
-        const ma21Data = {json.dumps([None if np.isnan(x) else float(x) for x in ma21_full])};
+        const historicalPrices = {json.dumps(historical_prices)};
+        const predictedPrices = {json.dumps(predicted_prices)};
+        const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_full])};
+        const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_full])};
         
         const chart = new Chart(ctx, {{
             type: 'line',
@@ -248,7 +252,7 @@ class ChartGenerator:
                 datasets: [
                     {{
                         label: 'Historical Price',
-                        data: priceData.slice(0, -1),  // Only historical data
+                        data: historicalPrices,
                         borderColor: '#a855f7',
                         backgroundColor: 'rgba(168, 85, 247, 0.1)',
                         borderWidth: 3,
@@ -257,23 +261,23 @@ class ChartGenerator:
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 6,
-                        tension: 0.4,
+                        tension: 0,  // NO SMOOTHING - Direct line
                         fill: true,
                         spanGaps: false
                     }},
                     {{
                         label: 'Predicted Price',
-                        data: priceData.slice({n - 1}),  // Last two points: current price + predicted price
+                        data: predictedPrices,
                         borderColor: '#06b6d4',
                         backgroundColor: 'rgba(6, 182, 212, 0.05)',
                         borderWidth: 3,
                         borderDash: [5, 5],
-                        pointRadius: [0, 6],  // Only show point for predicted value
+                        pointRadius: 6,
                         pointBackgroundColor: '#0891b2',
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 8,
-                        tension: 0.4,
+                        tension: 0,  // NO SMOOTHING - Direct line
                         fill: false,
                         spanGaps: false
                     }},
@@ -285,7 +289,7 @@ class ChartGenerator:
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0.4,
+                        tension: 0,  // NO SMOOTHING
                         fill: false,
                         spanGaps: true
                     }},
@@ -297,7 +301,7 @@ class ChartGenerator:
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0.4,
+                        tension: 0,  // NO SMOOTHING
                         fill: false,
                         spanGaps: true
                     }}
