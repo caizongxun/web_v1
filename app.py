@@ -313,6 +313,9 @@ def predict():
         "klines": 100,
         "source": "binance"  (optional, default: binance)
     }
+    
+    IMPORTANT: Uses the previous completed candle for prediction,
+    not the current incomplete candle being formed.
     """
     try:
         data = request.get_json()
@@ -374,44 +377,48 @@ def predict():
         lows = market_data['lows']
         current_price = market_data['current_price']
         
-        # Ensure exact count
-        prices = prices[-klines_count:]
-        volumes = volumes[-klines_count:]
-        highs = highs[-klines_count:]
-        lows = lows[-klines_count:]
+        # IMPORTANT: Use only up to (klines_count - 1) to exclude the current incomplete candle
+        # This ensures we only use completed, fully-formed candles for prediction
+        prediction_prices = prices[-(klines_count-1):] if len(prices) >= klines_count else prices
+        prediction_volumes = volumes[-(klines_count-1):] if len(volumes) >= klines_count else volumes
+        prediction_highs = highs[-(klines_count-1):] if len(highs) >= klines_count else highs
+        prediction_lows = lows[-(klines_count-1):] if len(lows) >= klines_count else lows
         
-        # Calculate technical indicators
+        # The last completed candle becomes our reference
+        last_completed_price = prediction_prices[-1]
+        
+        # Calculate technical indicators on completed candles only
         indicators = {
-            'RSI': TechnicalIndicators.calculate_rsi(prices),
-            'MACD': TechnicalIndicators.calculate_macd(prices),
-            'ADX': TechnicalIndicators.calculate_adx(highs, lows, prices),
-            'ATR': TechnicalIndicators.calculate_atr(highs, lows, prices),
-            'Volatility': TechnicalIndicators.calculate_volatility(prices)
+            'RSI': TechnicalIndicators.calculate_rsi(prediction_prices),
+            'MACD': TechnicalIndicators.calculate_macd(prediction_prices),
+            'ADX': TechnicalIndicators.calculate_adx(prediction_highs, prediction_lows, prediction_prices),
+            'ATR': TechnicalIndicators.calculate_atr(prediction_highs, prediction_lows, prediction_prices),
+            'Volatility': TechnicalIndicators.calculate_volatility(prediction_prices)
         }
         
-        # Make prediction
+        # Make prediction using only completed candles
         model = V6Model()
-        predicted_price, confidence = model.predict(prices, volumes, indicators)
+        predicted_price, confidence = model.predict(prediction_prices, prediction_volumes, indicators)
         
-        # Risk management
-        entry_price = RiskManager.calculate_entry_price(current_price, predicted_price)
+        # Risk management (use last completed price as reference)
+        entry_price = RiskManager.calculate_entry_price(last_completed_price, predicted_price)
         stop_loss = RiskManager.calculate_stop_loss(entry_price, indicators['ATR'])
         take_profit = RiskManager.calculate_take_profit(entry_price, stop_loss)
         
         # Generate signal
         recommendation = RiskManager.generate_signal(
-            predicted_price, current_price, confidence, indicators
+            predicted_price, last_completed_price, confidence, indicators
         )
         
         # Volatility assessment
-        current_vol = TechnicalIndicators.calculate_volatility(prices[-20:])
+        current_vol = TechnicalIndicators.calculate_volatility(prediction_prices[-20:])
         predicted_vol = indicators['Volatility'] * np.random.uniform(0.9, 1.1)
         
         # Model predictions
         model_predictions = {
-            'LSTM': float(model._lstm_predict(prices, indicators)),
-            'GRU': float(model._gru_predict(prices, indicators)),
-            'XGBoost': float(model._xgboost_predict(prices, volumes, indicators))
+            'LSTM': float(model._lstm_predict(prediction_prices, indicators)),
+            'GRU': float(model._gru_predict(prediction_prices, indicators)),
+            'XGBoost': float(model._xgboost_predict(prediction_prices, prediction_volumes, indicators))
         }
         
         # Response
@@ -420,6 +427,7 @@ def predict():
             'timeframe': timeframe,
             'klines_count': klines_count,
             'data_source': data_source_used,
+            'last_completed_price': float(last_completed_price),
             'current_price': float(current_price),
             'predicted_price': float(predicted_price),
             'confidence': float(confidence),
@@ -441,10 +449,11 @@ def predict():
             'model_predictions': model_predictions,
             'model_config': MODEL_CONFIG,
             'accuracy': ACCURACY[timeframe],
+            'prediction_note': 'Prediction is based on the last completed candle, not the current incomplete candle',
             'timestamp': datetime.now().isoformat()
         }
         
-        logger.info(f'Prediction generated: {symbol} {timeframe} from {data_source_used}')
+        logger.info(f'Prediction generated: {symbol} {timeframe} from {data_source_used} (using {len(prediction_prices)} completed candles)')
         return jsonify(response), 200
         
     except Exception as e:
@@ -486,33 +495,34 @@ def generate_price_chart():
         if not DataFetcher.validate_data(market_data):
             return jsonify({'error': 'Invalid market data'}), 502
         
-        # Extract data - use ALL prices for prediction
+        # Extract all data
         all_prices = list(market_data['prices'][-klines_count:])
-        
-        # Make prediction using all prices
         volumes = market_data['volumes']
         highs = market_data['highs']
         lows = market_data['lows']
         
+        # Use completed candles for prediction (exclude current incomplete)
+        prediction_prices = all_prices[:-1] if len(all_prices) > 1 else all_prices
+        prediction_volumes = volumes[-len(prediction_prices):]
+        prediction_highs = highs[-len(prediction_prices):]
+        prediction_lows = lows[-len(prediction_prices):]
+        
         indicators = {
-            'RSI': TechnicalIndicators.calculate_rsi(all_prices),
-            'MACD': TechnicalIndicators.calculate_macd(all_prices),
-            'ADX': TechnicalIndicators.calculate_adx(highs[-klines_count:], lows[-klines_count:], all_prices),
-            'ATR': TechnicalIndicators.calculate_atr(highs[-klines_count:], lows[-klines_count:], all_prices),
-            'Volatility': TechnicalIndicators.calculate_volatility(all_prices)
+            'RSI': TechnicalIndicators.calculate_rsi(prediction_prices),
+            'MACD': TechnicalIndicators.calculate_macd(prediction_prices),
+            'ADX': TechnicalIndicators.calculate_adx(prediction_highs, prediction_lows, prediction_prices),
+            'ATR': TechnicalIndicators.calculate_atr(prediction_highs, prediction_lows, prediction_prices),
+            'Volatility': TechnicalIndicators.calculate_volatility(prediction_prices)
         }
         
         model = V6Model()
-        predicted_price, _ = model.predict(all_prices, volumes[-klines_count:], indicators)
+        predicted_price, _ = model.predict(prediction_prices, prediction_volumes, indicators)
         
-        # For chart display, only pass last 40 candles
-        display_count = 40
-        display_prices = all_prices[-display_count:]
+        # For chart display, show last 40 of all available prices (including current)
+        # But pass all_prices to visualization for proper charting
+        html = ChartGenerator.generate_price_chart(all_prices, predicted_price, symbol, timeframe)
         
-        # Generate chart with display prices
-        html = ChartGenerator.generate_price_chart(display_prices, predicted_price, symbol, timeframe)
-        
-        logger.info(f'Chart generated: {symbol} {timeframe} (displaying last {display_count} of {klines_count} candles)')
+        logger.info(f'Chart generated: {symbol} {timeframe} (displaying {len(all_prices)} candles, prediction based on {len(prediction_prices)} completed)')
         return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
         
     except Exception as e:
@@ -554,13 +564,18 @@ def technical_indicators_dashboard():
         highs = market_data['highs']
         lows = market_data['lows']
         
+        # Use only completed candles
+        indicator_prices = prices[:-1] if len(prices) > 1 else prices
+        indicator_highs = highs[-len(indicator_prices):]
+        indicator_lows = lows[-len(indicator_prices):]
+        
         # Calculate indicators
         indicators = {
-            'RSI': TechnicalIndicators.calculate_rsi(prices),
-            'MACD': TechnicalIndicators.calculate_macd(prices),
-            'ADX': TechnicalIndicators.calculate_adx(highs[-klines_count:], lows[-klines_count:], prices),
-            'ATR': TechnicalIndicators.calculate_atr(highs[-klines_count:], lows[-klines_count:], prices),
-            'Volatility': TechnicalIndicators.calculate_volatility(prices)
+            'RSI': TechnicalIndicators.calculate_rsi(indicator_prices),
+            'MACD': TechnicalIndicators.calculate_macd(indicator_prices),
+            'ADX': TechnicalIndicators.calculate_adx(indicator_highs, indicator_lows, indicator_prices),
+            'ATR': TechnicalIndicators.calculate_atr(indicator_highs, indicator_lows, indicator_prices),
+            'Volatility': TechnicalIndicators.calculate_volatility(indicator_prices)
         }
         
         # Generate dashboard
@@ -629,4 +644,5 @@ if __name__ == '__main__':
     logger.info(f'Model Config: {MODEL_CONFIG}')
     logger.info(f'Default Data Source: {DEFAULT_DATA_SOURCE}')
     logger.info(f'Cache Enabled: {DEFAULT_CACHE_ENABLED}')
+    logger.info('NOTE: Predictions use completed candles, not current incomplete candles')
     app.run(host='localhost', port=8001, debug=True)
