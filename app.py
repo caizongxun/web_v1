@@ -150,8 +150,8 @@ class TechnicalIndicators:
         gains = np.where(deltas > 0, deltas, 0)
         losses = np.where(deltas < 0, -deltas, 0)
         
-        avg_gain = np.mean(gains[-period:])
-        avg_loss = np.mean(losses[-period:])
+        avg_gain = np.mean(gains[-period:]) if len(gains) >= period else np.mean(gains)
+        avg_loss = np.mean(losses[-period:]) if len(losses) >= period else np.mean(losses)
         
         if avg_loss == 0:
             return 100.0 if avg_gain > 0 else 50.0
@@ -178,36 +178,55 @@ class TechnicalIndicators:
         low = np.array(low)
         close = np.array(close)
         
-        tr = np.maximum(high - low, np.abs(high - close[0]))
-        atr = np.mean(tr[-period:])
+        # Ensure all arrays have the same length
+        min_len = min(len(high), len(low), len(close))
+        high = high[-min_len:]
+        low = low[-min_len:]
+        close = close[-min_len:]
         
-        adx = 50 + (high[-1] - low[-1]) / atr * 10
+        tr = np.maximum(high - low, np.abs(high - close[0]))
+        atr = np.mean(tr[-period:]) if len(tr) >= period else np.mean(tr)
+        
+        adx = 50 + (high[-1] - low[-1]) / atr * 10 if atr > 0 else 50
         return float(np.clip(adx, 0, 100))
     
     @staticmethod
     def calculate_atr(high, low, close, period=14):
-        """Average True Range"""
-        high = np.array(high)
-        low = np.array(low)
-        close = np.array(close)
+        """Average True Range - FIXED: Proper array alignment"""
+        high = np.array(high, dtype=float)
+        low = np.array(low, dtype=float)
+        close = np.array(close, dtype=float)
         
-        tr = np.maximum(
-            high - low,
-            np.maximum(
-                np.abs(high - close[:-1]),
-                np.abs(low - close[:-1])
-            )
-        )
+        # Ensure all arrays have the same length
+        min_len = min(len(high), len(low), len(close))
+        high = high[-min_len:]
+        low = low[-min_len:]
+        close = close[-min_len:]
         
-        atr = np.mean(tr[-period:])
+        # Calculate True Range
+        # TR = max(high - low, abs(high - previous close), abs(low - previous close))
+        tr1 = high - low
+        
+        # For previous close comparisons, pad with current close for first element
+        close_prev = np.concatenate([[close[0]], close[:-1]])
+        tr2 = np.abs(high - close_prev)
+        tr3 = np.abs(low - close_prev)
+        
+        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+        
+        # Calculate ATR as SMA of TR
+        atr = np.mean(tr[-period:]) if len(tr) >= period else np.mean(tr)
         return float(atr)
     
     @staticmethod
     def calculate_volatility(prices, period=20):
         """Historical volatility"""
-        prices = np.array(prices)
+        prices = np.array(prices, dtype=float)
+        if len(prices) < 2:
+            return 0.0
+        
         returns = np.diff(prices) / prices[:-1]
-        volatility = np.std(returns[-period:])
+        volatility = np.std(returns[-period:]) if len(returns) >= period else np.std(returns)
         return float(volatility)
     
     @staticmethod
@@ -237,7 +256,10 @@ class RiskManager:
     @staticmethod
     def calculate_stop_loss(entry_price, atr):
         """Calculate stop loss based on ATR"""
-        return entry_price * (1 - atr / entry_price * 1.5)
+        if atr > 0:
+            return entry_price * (1 - atr / entry_price * 1.5)
+        else:
+            return entry_price * 0.95  # Default 5% stop loss
     
     @staticmethod
     def calculate_take_profit(entry_price, stop_loss):
@@ -317,12 +339,17 @@ def predict():
         if klines_count < min_k or klines_count > max_k:
             return jsonify({'error': f'K-lines for {timeframe} should be {min_k}-{max_k}'}), 400
         
-        # Simulate market data
+        # Simulate market data - Ensure all arrays have same length
         current_price = np.random.uniform(100, 50000)  # In production, fetch real data
         prices = generate_price_data(current_price, klines_count)
-        volumes = np.random.uniform(1000000, 10000000, klines_count)
+        volumes = np.random.uniform(1000000, 10000000, klines_count).tolist()
         
-        # Calculate technical indicators
+        # Ensure prices is a list of length klines_count
+        prices = np.array(prices)
+        if len(prices) != klines_count:
+            prices = prices[-klines_count:]
+        
+        # Calculate technical indicators - All with same array length
         indicators = {
             'RSI': TechnicalIndicators.calculate_rsi(prices),
             'MACD': TechnicalIndicators.calculate_macd(prices),
@@ -443,7 +470,7 @@ def generate_price_data(current_price, count):
         price = price * (1 + change)
         prices.insert(0, price)
     
-    return prices
+    return prices[:count]  # Ensure exactly count elements
 
 if __name__ == '__main__':
     logger.info('Starting CPB Crypto Predictor V6 API Server')
