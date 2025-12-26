@@ -2,9 +2,10 @@
 """
 CPB Crypto Predictor Web V6 - Backend API Server
 Hybrid Model: LSTM (50%) + GRU (30%) + XGBoost (20%)
+With Real-time Data from Binance and yfinance
 
 Author: CPB Team
-Version: 6.0
+Version: 6.1
 Port: 8001
 """
 
@@ -15,6 +16,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import logging
+from data_fetcher import DataFetcher, data_cache
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 # Flask app initialization
 app = Flask(__name__)
 CORS(app)
+
+# Configuration
+DEFAULT_DATA_SOURCE = os.getenv('DATA_SOURCE', 'binance')  # 'binance' or 'yfinance'
+DEFAULT_CACHE_ENABLED = os.getenv('CACHE_ENABLED', 'true').lower() == 'true'
 
 # V6 Model Configuration
 MODEL_CONFIG = {
@@ -61,9 +67,9 @@ ACCURACY = {
 
 # Kline range recommendations
 KLINE_RANGES = {
-    '1d': (30, 100),
-    '1h': (24, 168),
-    '15m': (96, 672)
+    '1d': (30, 1000),
+    '1h': (24, 1000),
+    '15m': (96, 1000)
 }
 
 class V6Model:
@@ -77,7 +83,7 @@ class V6Model:
         Make prediction using hybrid model
         Returns: (predicted_price, confidence)
         """
-        # Simulate model predictions (in production, use actual models)
+        # Simulate model predictions (in production, use actual trained models)
         lstm_pred = self._lstm_predict(prices, technical_indicators)
         gru_pred = self._gru_predict(prices, technical_indicators)
         xgboost_pred = self._xgboost_predict(prices, volumes, technical_indicators)
@@ -92,7 +98,7 @@ class V6Model:
         # Calculate confidence
         predictions = np.array([lstm_pred, gru_pred, xgboost_pred])
         std = np.std(predictions)
-        confidence = max(0.0, min(1.0, 1.0 - std / final_pred))
+        confidence = max(0.0, min(1.0, 1.0 - std / final_pred)) if final_pred != 0 else 0.5
         
         return float(final_pred), float(confidence)
     
@@ -204,10 +210,7 @@ class TechnicalIndicators:
         close = close[-min_len:]
         
         # Calculate True Range
-        # TR = max(high - low, abs(high - previous close), abs(low - previous close))
         tr1 = high - low
-        
-        # For previous close comparisons, pad with current close for first element
         close_prev = np.concatenate([[close[0]], close[:-1]])
         tr2 = np.abs(high - close_prev)
         tr3 = np.abs(low - close_prev)
@@ -269,9 +272,7 @@ class RiskManager:
     
     @staticmethod
     def generate_signal(predicted_price, current_price, confidence, indicators):
-        """
-        Generate trading signal based on multiple factors
-        """
+        """Generate trading signal based on multiple factors"""
         rsi = indicators.get('RSI', 50)
         macd = indicators.get('MACD', 0)
         
@@ -303,12 +304,13 @@ class RiskManager:
 @app.route('/api/v6/predict', methods=['POST'])
 def predict():
     """
-    Main prediction endpoint
+    Main prediction endpoint with real-time data
     Expected JSON:
     {
         "symbol": "BTCUSDT",
         "timeframe": "1d",
-        "klines": 100
+        "klines": 100,
+        "source": "binance"  (optional, default: binance)
     }
     """
     try:
@@ -318,6 +320,8 @@ def predict():
         symbol = data.get('symbol', '').upper()
         timeframe = data.get('timeframe', '1d')
         klines_count = data.get('klines', 100)
+        data_source = data.get('source', DEFAULT_DATA_SOURCE).lower()
+        use_cache = data.get('cache', DEFAULT_CACHE_ENABLED)
         
         # Extract crypto symbol
         crypto = symbol.replace('USDT', '').replace('BUSD', '')
@@ -339,22 +343,48 @@ def predict():
         if klines_count < min_k or klines_count > max_k:
             return jsonify({'error': f'K-lines for {timeframe} should be {min_k}-{max_k}'}), 400
         
-        # Simulate market data - Ensure all arrays have same length
-        current_price = np.random.uniform(100, 50000)  # In production, fetch real data
-        prices = generate_price_data(current_price, klines_count)
-        volumes = np.random.uniform(1000000, 10000000, klines_count).tolist()
+        # Validate data source
+        if data_source not in ['binance', 'yfinance']:
+            return jsonify({'error': f'Unsupported data source: {data_source}'}), 400
         
-        # Ensure prices is a list of length klines_count
-        prices = np.array(prices)
-        if len(prices) != klines_count:
-            prices = prices[-klines_count:]
+        # Check cache first
+        cache_key = f"{data_source}:{symbol}:{timeframe}:{klines_count}"
+        if use_cache:
+            cached_data = data_cache.get(cache_key)
+            if cached_data:
+                market_data = cached_data
+                data_source_used = f"{data_source} (cached)"
+            else:
+                market_data = DataFetcher.get_crypto_data(symbol, timeframe, klines_count, data_source)
+                data_cache.set(cache_key, market_data)
+                data_source_used = data_source
+        else:
+            market_data = DataFetcher.get_crypto_data(symbol, timeframe, klines_count, data_source)
+            data_source_used = data_source
         
-        # Calculate technical indicators - All with same array length
+        # Validate market data
+        if not DataFetcher.validate_data(market_data, min_klines=min_k):
+            return jsonify({'error': 'Invalid market data received'}), 502
+        
+        # Extract data
+        prices = market_data['prices']
+        volumes = market_data['volumes']
+        highs = market_data['highs']
+        lows = market_data['lows']
+        current_price = market_data['current_price']
+        
+        # Ensure exact count
+        prices = prices[-klines_count:]
+        volumes = volumes[-klines_count:]
+        highs = highs[-klines_count:]
+        lows = lows[-klines_count:]
+        
+        # Calculate technical indicators
         indicators = {
             'RSI': TechnicalIndicators.calculate_rsi(prices),
             'MACD': TechnicalIndicators.calculate_macd(prices),
-            'ADX': TechnicalIndicators.calculate_adx(prices, prices, prices),
-            'ATR': TechnicalIndicators.calculate_atr(prices, prices, prices),
+            'ADX': TechnicalIndicators.calculate_adx(highs, lows, prices),
+            'ATR': TechnicalIndicators.calculate_atr(highs, lows, prices),
             'Volatility': TechnicalIndicators.calculate_volatility(prices)
         }
         
@@ -388,6 +418,7 @@ def predict():
             'symbol': symbol,
             'timeframe': timeframe,
             'klines_count': klines_count,
+            'data_source': data_source_used,
             'current_price': float(current_price),
             'predicted_price': float(predicted_price),
             'confidence': float(confidence),
@@ -412,7 +443,7 @@ def predict():
             'timestamp': datetime.now().isoformat()
         }
         
-        logger.info(f'Prediction generated: {symbol} {timeframe}')
+        logger.info(f'Prediction generated: {symbol} {timeframe} from {data_source_used}')
         return jsonify(response), 200
         
     except Exception as e:
@@ -427,14 +458,20 @@ def get_supported_symbols():
         'partial_support': CRYPTO_SUPPORT['partial'],
         'timeframes': list(ACCURACY.keys()),
         'accuracy': ACCURACY,
-        'kline_ranges': KLINE_RANGES
+        'kline_ranges': KLINE_RANGES,
+        'data_sources': ['binance', 'yfinance']
     }
     return jsonify(response), 200
 
 @app.route('/api/v6/config', methods=['GET'])
 def get_model_config():
     """Get V6 model configuration"""
-    return jsonify(MODEL_CONFIG), 200
+    return jsonify({
+        **MODEL_CONFIG,
+        'default_data_source': DEFAULT_DATA_SOURCE,
+        'cache_enabled': DEFAULT_CACHE_ENABLED,
+        'cache_ttl_seconds': 300
+    }), 200
 
 @app.route('/api/v6/health', methods=['GET'])
 def health_check():
@@ -442,6 +479,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'version': MODEL_CONFIG['version'],
+        'data_sources': ['binance', 'yfinance'],
         'timestamp': datetime.now().isoformat()
     }), 200
 
@@ -450,8 +488,9 @@ def index():
     """Root endpoint"""
     return jsonify({
         'name': 'CPB Crypto Predictor Web',
-        'version': 'V6',
-        'description': 'Advanced cryptocurrency price prediction API',
+        'version': 'V6.1',
+        'description': 'Advanced cryptocurrency price prediction API with real-time data',
+        'data_sources': ['Binance API', 'yfinance'],
         'endpoints': {
             'predict': '/api/v6/predict',
             'symbols': '/api/v6/symbols',
@@ -460,19 +499,9 @@ def index():
         }
     }), 200
 
-def generate_price_data(current_price, count):
-    """Generate simulated price data"""
-    prices = [current_price]
-    price = current_price
-    
-    for _ in range(count - 1):
-        change = np.random.normal(0, 0.01)
-        price = price * (1 + change)
-        prices.insert(0, price)
-    
-    return prices[:count]  # Ensure exactly count elements
-
 if __name__ == '__main__':
-    logger.info('Starting CPB Crypto Predictor V6 API Server')
+    logger.info('Starting CPB Crypto Predictor V6.1 API Server')
     logger.info(f'Model Config: {MODEL_CONFIG}')
+    logger.info(f'Default Data Source: {DEFAULT_DATA_SOURCE}')
+    logger.info(f'Cache Enabled: {DEFAULT_CACHE_ENABLED}')
     app.run(host='localhost', port=8001, debug=True)
