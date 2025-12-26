@@ -4,8 +4,7 @@ Price Prediction Visualization Module
 Provides improved chart generation for prediction results
 
 Features:
-- Display last 40 candles from requested data
-- Leave space for prediction line
+- JavaScript handles display filtering (show last 40 candles)
 - No smoothing (tension: 0)
 - Better color schemes
 - Proper legend positioning
@@ -26,7 +25,7 @@ class ChartGenerator:
         Generate interactive price prediction chart using Chart.js
         
         Args:
-            prices: List of historical prices (e.g., 100 points)
+            prices: List of historical prices (all data from API)
             predicted_price: Predicted next price
             symbol: Trading symbol (e.g., 'BTCUSDT')
             timeframe: Time frame (e.g., '1d')
@@ -35,35 +34,15 @@ class ChartGenerator:
             HTML string with embedded chart
         """
         
-        # Only display last 40 candles from the requested data
-        # This leaves room for the prediction line
-        display_count = 40
-        start_idx = max(0, len(prices) - display_count)
-        
-        # Get the portion to display
-        displayed_prices = prices[start_idx:]
-        n_display = len(displayed_prices)
-        
-        # Generate K-line labels (show only the displayed portion)
-        # K1 represents the oldest displayed candle
-        labels = [f'K{start_idx + i + 1}' for i in range(n_display)] + ['K+1']
-        
-        # Current price (last price point)
-        current_price = prices[-1]
-        
-        # Prepare data: only show displayed historical prices, then predicted
-        historical_prices = list(displayed_prices)
-        predicted_prices = [None] * n_display + [current_price, predicted_price]
-        
-        # Calculate moving averages on FULL dataset
+        # Calculate moving averages on full dataset
         ma7_full = ChartGenerator._calculate_ma(prices, 7)
         ma21_full = ChartGenerator._calculate_ma(prices, 21)
         
-        # Extract only the displayed portion of MAs
-        ma7_display = ma7_full[start_idx:] + [None]
-        ma21_display = ma21_full[start_idx:] + [None]
+        # Current price (last price point)
+        current_price = prices[-1]
+        n_total = len(prices)
         
-        # HTML with Chart.js
+        # HTML with Chart.js - filtering happens in JavaScript
         html = f"""
 <!DOCTYPE html>
 <html lang="en">
@@ -198,7 +177,7 @@ class ChartGenerator:
     <div class="container">
         <div class="header">
             <h1>Price Prediction Visualization</h1>
-            <p>Advanced Technical Analysis for {symbol} ({timeframe}) - Showing Last {n_display} Candles</p>
+            <p>Advanced Technical Analysis for {symbol} ({timeframe}) - Showing Last 40 Candles (Total: {n_total})</p>
         </div>
         
         <div class="chart-wrapper">
@@ -249,13 +228,46 @@ class ChartGenerator:
     </div>
     
     <script>
-        const ctx = document.getElementById('priceChart').getContext('2d');
-        const labels = {json.dumps(labels)};
-        const historicalPrices = {json.dumps(historical_prices)};
-        const predictedPrices = {json.dumps(predicted_prices)};
-        const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_display])};
-        const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_display])};
+        // Full data from server
+        const fullPrices = {json.dumps([float(p) for p in prices])};
+        const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_full])};
+        const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_full])};
+        const predictedPrice = {json.dumps(float(predicted_price))};
+        const currentPrice = {json.dumps(float(current_price))};
         
+        // Display configuration
+        const displayCount = 40;
+        const startIdx = Math.max(0, fullPrices.length - displayCount);
+        
+        // Extract display data
+        const displayPrices = fullPrices.slice(startIdx);
+        const displayMA7 = ma7Data.slice(startIdx);
+        const displayMA21 = ma21Data.slice(startIdx);
+        
+        // Generate labels for displayed range
+        const labels = [];
+        for (let i = 0; i < displayPrices.length; i++) {{
+            labels.push(`K${{startIdx + i + 1}}`);
+        }}
+        labels.push('K+1'); // Prediction point
+        
+        // Prepare historical prices (only displayed portion)
+        const historicalPrices = displayPrices;
+        
+        // Prepare predicted prices (None for historical, then current + predicted)
+        const predictedPrices = [];
+        for (let i = 0; i < displayPrices.length; i++) {{
+            predictedPrices.push(null);
+        }}
+        predictedPrices.push(currentPrice);
+        predictedPrices.push(predictedPrice);
+        
+        // Prepare MA data (extend with one null for prediction point)
+        const ma7Display = displayMA7.concat([null]);
+        const ma21Display = displayMA21.concat([null]);
+        
+        // Chart.js configuration
+        const ctx = document.getElementById('priceChart').getContext('2d');
         const chart = new Chart(ctx, {{
             type: 'line',
             data: {{
@@ -272,7 +284,7 @@ class ChartGenerator:
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 6,
-                        tension: 0,
+                        tension: 0,  // NO SMOOTHING
                         fill: true,
                         spanGaps: false
                     }},
@@ -288,31 +300,31 @@ class ChartGenerator:
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 8,
-                        tension: 0,
+                        tension: 0,  // NO SMOOTHING
                         fill: false,
                         spanGaps: false
                     }},
                     {{
                         label: 'MA(7)',
-                        data: ma7Data,
+                        data: ma7Display,
                         borderColor: 'rgba(34, 197, 94, 0.6)',
                         backgroundColor: 'transparent',
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0,
+                        tension: 0,  // NO SMOOTHING
                         fill: false,
                         spanGaps: true
                     }},
                     {{
                         label: 'MA(21)',
-                        data: ma21Data,
+                        data: ma21Display,
                         borderColor: 'rgba(245, 158, 11, 0.6)',
                         backgroundColor: 'transparent',
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0,
+                        tension: 0,  // NO SMOOTHING
                         fill: false,
                         spanGaps: true
                     }}
@@ -391,6 +403,10 @@ class ChartGenerator:
                 }}
             }}
         }});
+        
+        console.log('Chart rendered successfully');
+        console.log(`Display range: K${{startIdx + 1}} to K${{startIdx + displayCount}} (of ${{fullPrices.length}} total)');
+        console.log(`Prediction: ${{currentPrice.toFixed(2)}} -> ${{predictedPrice.toFixed(2)}}`);
     </script>
 </body>
 </html>
