@@ -4,7 +4,9 @@ Price Prediction Visualization Module
 Provides improved chart generation for prediction results
 
 Features:
-- Direct line rendering (no smoothing)
+- Display last 40 candles from requested data
+- Leave space for prediction line
+- No smoothing (tension: 0)
 - Better color schemes
 - Proper legend positioning
 - Technical indicators overlay
@@ -24,7 +26,7 @@ class ChartGenerator:
         Generate interactive price prediction chart using Chart.js
         
         Args:
-            prices: List of historical prices
+            prices: List of historical prices (e.g., 100 points)
             predicted_price: Predicted next price
             symbol: Trading symbol (e.g., 'BTCUSDT')
             timeframe: Time frame (e.g., '1d')
@@ -33,24 +35,33 @@ class ChartGenerator:
             HTML string with embedded chart
         """
         
-        # Generate K-line labels
-        n = len(prices)
-        labels = [f'K{i+1}' for i in range(n)] + ['K+1']
+        # Only display last 40 candles from the requested data
+        # This leaves room for the prediction line
+        display_count = 40
+        start_idx = max(0, len(prices) - display_count)
+        
+        # Get the portion to display
+        displayed_prices = prices[start_idx:]
+        n_display = len(displayed_prices)
+        
+        # Generate K-line labels (show only the displayed portion)
+        # K1 represents the oldest displayed candle
+        labels = [f'K{start_idx + i + 1}' for i in range(n_display)] + ['K+1']
         
         # Current price (last price point)
         current_price = prices[-1]
         
-        # Prepare historical and predicted data separately (NO smoothing)
-        historical_prices = list(prices)
-        predicted_prices = [None] * (n - 1) + [current_price, predicted_price]
+        # Prepare data: only show displayed historical prices, then predicted
+        historical_prices = list(displayed_prices)
+        predicted_prices = [None] * n_display + [current_price, predicted_price]
         
-        # Calculate moving averages
-        ma7 = ChartGenerator._calculate_ma(prices, 7)
-        ma21 = ChartGenerator._calculate_ma(prices, 21)
+        # Calculate moving averages on FULL dataset
+        ma7_full = ChartGenerator._calculate_ma(prices, 7)
+        ma21_full = ChartGenerator._calculate_ma(prices, 21)
         
-        # Extend MA data to match full dataset length (with None for prediction point)
-        ma7_full = ma7 + [None]
-        ma21_full = ma21 + [None]
+        # Extract only the displayed portion of MAs
+        ma7_display = ma7_full[start_idx:] + [None]
+        ma21_display = ma21_full[start_idx:] + [None]
         
         # HTML with Chart.js
         html = f"""
@@ -187,7 +198,7 @@ class ChartGenerator:
     <div class="container">
         <div class="header">
             <h1>Price Prediction Visualization</h1>
-            <p>Advanced Technical Analysis for {symbol} ({timeframe})</p>
+            <p>Advanced Technical Analysis for {symbol} ({timeframe}) - Showing Last {n_display} Candles</p>
         </div>
         
         <div class="chart-wrapper">
@@ -242,8 +253,8 @@ class ChartGenerator:
         const labels = {json.dumps(labels)};
         const historicalPrices = {json.dumps(historical_prices)};
         const predictedPrices = {json.dumps(predicted_prices)};
-        const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_full])};
-        const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_full])};
+        const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_display])};
+        const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_display])};
         
         const chart = new Chart(ctx, {{
             type: 'line',
@@ -261,7 +272,7 @@ class ChartGenerator:
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 6,
-                        tension: 0,  // NO SMOOTHING - Direct line
+                        tension: 0,
                         fill: true,
                         spanGaps: false
                     }},
@@ -277,7 +288,7 @@ class ChartGenerator:
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                         pointHoverRadius: 8,
-                        tension: 0,  // NO SMOOTHING - Direct line
+                        tension: 0,
                         fill: false,
                         spanGaps: false
                     }},
@@ -289,7 +300,7 @@ class ChartGenerator:
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0,  // NO SMOOTHING
+                        tension: 0,
                         fill: false,
                         spanGaps: true
                     }},
@@ -301,7 +312,7 @@ class ChartGenerator:
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0,  // NO SMOOTHING
+                        tension: 0,
                         fill: false,
                         spanGaps: true
                     }}
