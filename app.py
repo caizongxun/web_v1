@@ -17,6 +17,7 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import logging
 from data_fetcher import DataFetcher, data_cache
+from visualization import ChartGenerator
 
 # Configure logging
 logging.basicConfig(
@@ -450,6 +451,124 @@ def predict():
         logger.error(f'Prediction error: {str(e)}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/v6/chart', methods=['POST'])
+def generate_price_chart():
+    """
+    Generate interactive price prediction chart
+    Expected JSON: Same as /api/v6/predict
+    Returns: HTML page with embedded Chart.js visualization
+    """
+    try:
+        data = request.get_json()
+        
+        # Get prediction data first
+        symbol = data.get('symbol', '').upper()
+        timeframe = data.get('timeframe', '1d')
+        klines_count = data.get('klines', 100)
+        data_source = data.get('source', DEFAULT_DATA_SOURCE).lower()
+        use_cache = data.get('cache', DEFAULT_CACHE_ENABLED)
+        
+        # Extract crypto symbol
+        crypto = symbol.replace('USDT', '').replace('BUSD', '')
+        
+        # Get market data
+        cache_key = f"{data_source}:{symbol}:{timeframe}:{klines_count}"
+        if use_cache:
+            cached_data = data_cache.get(cache_key)
+            if cached_data:
+                market_data = cached_data
+            else:
+                market_data = DataFetcher.get_crypto_data(symbol, timeframe, klines_count, data_source)
+                data_cache.set(cache_key, market_data)
+        else:
+            market_data = DataFetcher.get_crypto_data(symbol, timeframe, klines_count, data_source)
+        
+        if not DataFetcher.validate_data(market_data):
+            return jsonify({'error': 'Invalid market data'}), 502
+        
+        # Extract data
+        prices = list(market_data['prices'][-klines_count:])
+        
+        # Make prediction
+        volumes = market_data['volumes']
+        highs = market_data['highs']
+        lows = market_data['lows']
+        
+        indicators = {
+            'RSI': TechnicalIndicators.calculate_rsi(prices),
+            'MACD': TechnicalIndicators.calculate_macd(prices),
+            'ADX': TechnicalIndicators.calculate_adx(highs, lows, prices),
+            'ATR': TechnicalIndicators.calculate_atr(highs, lows, prices),
+            'Volatility': TechnicalIndicators.calculate_volatility(prices)
+        }
+        
+        model = V6Model()
+        predicted_price, _ = model.predict(prices, volumes, indicators)
+        
+        # Generate chart
+        html = ChartGenerator.generate_price_chart(prices, predicted_price, symbol, timeframe)
+        
+        logger.info(f'Chart generated: {symbol} {timeframe}')
+        return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+        
+    except Exception as e:
+        logger.error(f'Chart generation error: {str(e)}')
+        return f"<html><body>Error: {str(e)}</body></html>", 500, {'Content-Type': 'text/html'}
+
+@app.route('/api/v6/indicators', methods=['POST'])
+def technical_indicators_dashboard():
+    """
+    Generate technical indicators dashboard
+    Returns: HTML page with technical indicators visualization
+    """
+    try:
+        data = request.get_json()
+        
+        # Similar to chart endpoint, but returns indicators dashboard
+        symbol = data.get('symbol', '').upper()
+        timeframe = data.get('timeframe', '1d')
+        klines_count = data.get('klines', 100)
+        data_source = data.get('source', DEFAULT_DATA_SOURCE).lower()
+        use_cache = data.get('cache', DEFAULT_CACHE_ENABLED)
+        
+        # Get market data
+        cache_key = f"{data_source}:{symbol}:{timeframe}:{klines_count}"
+        if use_cache:
+            cached_data = data_cache.get(cache_key)
+            if cached_data:
+                market_data = cached_data
+            else:
+                market_data = DataFetcher.get_crypto_data(symbol, timeframe, klines_count, data_source)
+                data_cache.set(cache_key, market_data)
+        else:
+            market_data = DataFetcher.get_crypto_data(symbol, timeframe, klines_count, data_source)
+        
+        if not DataFetcher.validate_data(market_data):
+            return jsonify({'error': 'Invalid market data'}), 502
+        
+        prices = list(market_data['prices'][-klines_count:])
+        highs = market_data['highs']
+        lows = market_data['lows']
+        
+        # Calculate indicators
+        indicators = {
+            'RSI': TechnicalIndicators.calculate_rsi(prices),
+            'MACD': TechnicalIndicators.calculate_macd(prices),
+            'ADX': TechnicalIndicators.calculate_adx(highs, lows, prices),
+            'ATR': TechnicalIndicators.calculate_atr(highs, lows, prices),
+            'Volatility': TechnicalIndicators.calculate_volatility(prices)
+        }
+        
+        # Generate dashboard
+        html = ChartGenerator.generate_technical_chart(indicators)
+        
+        logger.info(f'Indicators dashboard generated: {symbol}')
+        return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+        
+    except Exception as e:
+        logger.error(f'Indicators dashboard error: {str(e)}')
+        return f"<html><body>Error: {str(e)}</body></html>", 500, {'Content-Type': 'text/html'}
+
 @app.route('/api/v6/symbols', methods=['GET'])
 def get_supported_symbols():
     """Get list of supported cryptocurrencies"""
@@ -493,6 +612,8 @@ def index():
         'data_sources': ['Binance API', 'yfinance'],
         'endpoints': {
             'predict': '/api/v6/predict',
+            'chart': '/api/v6/chart',
+            'indicators': '/api/v6/indicators',
             'symbols': '/api/v6/symbols',
             'config': '/api/v6/config',
             'health': '/api/v6/health'
