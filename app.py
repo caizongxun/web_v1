@@ -486,29 +486,33 @@ def generate_price_chart():
         if not DataFetcher.validate_data(market_data):
             return jsonify({'error': 'Invalid market data'}), 502
         
-        # Extract data
-        prices = list(market_data['prices'][-klines_count:])
+        # Extract data - use ALL prices for prediction
+        all_prices = list(market_data['prices'][-klines_count:])
         
-        # Make prediction
+        # Make prediction using all prices
         volumes = market_data['volumes']
         highs = market_data['highs']
         lows = market_data['lows']
         
         indicators = {
-            'RSI': TechnicalIndicators.calculate_rsi(prices),
-            'MACD': TechnicalIndicators.calculate_macd(prices),
-            'ADX': TechnicalIndicators.calculate_adx(highs, lows, prices),
-            'ATR': TechnicalIndicators.calculate_atr(highs, lows, prices),
-            'Volatility': TechnicalIndicators.calculate_volatility(prices)
+            'RSI': TechnicalIndicators.calculate_rsi(all_prices),
+            'MACD': TechnicalIndicators.calculate_macd(all_prices),
+            'ADX': TechnicalIndicators.calculate_adx(highs[-klines_count:], lows[-klines_count:], all_prices),
+            'ATR': TechnicalIndicators.calculate_atr(highs[-klines_count:], lows[-klines_count:], all_prices),
+            'Volatility': TechnicalIndicators.calculate_volatility(all_prices)
         }
         
         model = V6Model()
-        predicted_price, _ = model.predict(prices, volumes, indicators)
+        predicted_price, _ = model.predict(all_prices, volumes[-klines_count:], indicators)
         
-        # Generate chart
-        html = ChartGenerator.generate_price_chart(prices, predicted_price, symbol, timeframe)
+        # For chart display, only pass last 40 candles
+        display_count = 40
+        display_prices = all_prices[-display_count:]
         
-        logger.info(f'Chart generated: {symbol} {timeframe}')
+        # Generate chart with display prices
+        html = ChartGenerator.generate_price_chart(display_prices, predicted_price, symbol, timeframe)
+        
+        logger.info(f'Chart generated: {symbol} {timeframe} (displaying last {display_count} of {klines_count} candles)')
         return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
         
     except Exception as e:
@@ -554,8 +558,8 @@ def technical_indicators_dashboard():
         indicators = {
             'RSI': TechnicalIndicators.calculate_rsi(prices),
             'MACD': TechnicalIndicators.calculate_macd(prices),
-            'ADX': TechnicalIndicators.calculate_adx(highs, lows, prices),
-            'ATR': TechnicalIndicators.calculate_atr(highs, lows, prices),
+            'ADX': TechnicalIndicators.calculate_adx(highs[-klines_count:], lows[-klines_count:], prices),
+            'ATR': TechnicalIndicators.calculate_atr(highs[-klines_count:], lows[-klines_count:], prices),
             'Volatility': TechnicalIndicators.calculate_volatility(prices)
         }
         
