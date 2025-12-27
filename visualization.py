@@ -4,17 +4,23 @@ Price Prediction Visualization Module
 Provides improved chart generation for prediction results
 
 Features:
-- JavaScript handles display filtering (show last 40 candles)
+- Fixed data consistency: Always shows EXACTLY the requested klines
+- JavaScript displays exactly what Python sends (no filtering that causes shifting)
 - No smoothing (tension: 0)
 - Better color schemes
 - Proper legend positioning
 - Technical indicators overlay
 - Responsive design
+
+CRITICAL: This version ensures 100% data consistency
 """
 
 import json
 import numpy as np
 from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ChartGenerator:
     """Generate interactive charts for price predictions"""
@@ -24,8 +30,11 @@ class ChartGenerator:
         """
         Generate interactive price prediction chart using Chart.js
         
+        CRITICAL FIX: This function receives EXACTLY the klines_count prices from app.py
+        and displays ALL of them, no filtering or shifting
+        
         Args:
-            prices: List of historical prices (all data from API)
+            prices: List of historical prices (EXACTLY klines_count items)
             predicted_price: Predicted next price
             symbol: Trading symbol (e.g., 'BTCUSDT')
             timeframe: Time frame (e.g., '1d')
@@ -34,23 +43,38 @@ class ChartGenerator:
             HTML string with embedded chart
         """
         
-        # Calculate moving averages on full dataset
-        ma7_full = ChartGenerator._calculate_ma(prices, 7)
-        ma21_full = ChartGenerator._calculate_ma(prices, 21)
+        # Input validation and logging
+        if not prices or len(prices) == 0:
+            logger.error("No prices provided to chart generation")
+            raise ValueError("Prices list is empty")
+        
+        prices_list = list(prices)
+        n_total = len(prices_list)
+        logger.info(f"Chart generation: symbol={symbol}, timeframe={timeframe}, prices_count={n_total}")
+        
+        # Calculate moving averages on FULL dataset (all prices)
+        ma7_full = ChartGenerator._calculate_ma(prices_list, 7)
+        ma21_full = ChartGenerator._calculate_ma(prices_list, 21)
         
         # Current price (last price point)
-        current_price = prices[-1]
-        n_total = len(prices)
+        current_price = prices_list[-1]
         
-        # HTML with Chart.js - filtering happens in JavaScript
-        html = f"""
-<!DOCTYPE html>
+        # Log data consistency
+        logger.info(f"Data consistency check:")
+        logger.info(f"  - Total prices received: {n_total}")
+        logger.info(f"  - MA7 points: {len([x for x in ma7_full if x is not None])}")
+        logger.info(f"  - MA21 points: {len([x for x in ma21_full if x is not None])}")
+        logger.info(f"  - Current price: ${current_price:.2f}")
+        logger.info(f"  - Predicted price: ${predicted_price:.2f}")
+        
+        # HTML with Chart.js - NO filtering in JavaScript, display exactly what we have
+        html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Price Prediction - {symbol}</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"><\/script>
     <style>
         * {{
             margin: 0;
@@ -171,87 +195,104 @@ class ChartGenerator:
         canvas {{
             max-height: 400px;
         }}
+        
+        .data-info {{
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(100, 150, 200, 0.1);
+            border-radius: 8px;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>Price Prediction Visualization</h1>
-            <p>Advanced Technical Analysis for {symbol} ({timeframe}) - Showing Last 40 Candles (Total: {n_total})</p>
+            <p>Advanced Technical Analysis for {symbol} ({timeframe}) - Total {n_total} Candles</p>
         </div>
         
         <div class="chart-wrapper">
             <div class="legend">
                 <div class="legend-item">
-                    <div class="legend-color legend-historical"></div>
-                    <span>Historical Price</span>
-                </div>
+                    <div class="legend-color legend-historical"><\/div>
+                    <span>Historical Price<\/span>
+                <\/div>
                 <div class="legend-item">
-                    <div class="legend-color legend-predicted"></div>
-                    <span>Predicted Price</span>
-                </div>
+                    <div class="legend-color legend-predicted"><\/div>
+                    <span>Predicted Price<\/span>
+                <\/div>
                 <div class="legend-item">
-                    <div class="legend-color legend-ma7"></div>
-                    <span>MA(7)</span>
-                </div>
+                    <div class="legend-color legend-ma7"><\/div>
+                    <span>MA(7)<\/span>
+                <\/div>
                 <div class="legend-item">
-                    <div class="legend-color legend-ma21"></div>
-                    <span>MA(21)</span>
-                </div>
-            </div>
+                    <div class="legend-color legend-ma21"><\/div>
+                    <span>MA(21)<\/span>
+                <\/div>
+            <\/div>
             
-            <canvas id="priceChart"></canvas>
-        </div>
+            <canvas id="priceChart"><\/canvas>
+            
+            <div class="data-info">
+                <strong>Data Consistency Info:<\/strong> Displaying exactly {n_total} historical candles + 1 predicted point
+            <\/div>
+        <\/div>
         
         <div class="info-grid">
             <div class="info-card">
-                <div class="label">Current Price</div>
-                <div class="value">${{{current_price}:,.2f}}</div>
-            </div>
+                <div class="label">Current Price<\/div>
+                <div class="value">${{{current_price}:,.2f}}<\/div>
+            <\/div>
             <div class="info-card">
-                <div class="label">Predicted Price</div>
-                <div class="value">${{{predicted_price}:,.2f}}</div>
-            </div>
+                <div class="label">Predicted Price<\/div>
+                <div class="value">${{{predicted_price}:,.2f}}<\/div>
+            <\/div>
             <div class="info-card">
-                <div class="label">Change Direction</div>
+                <div class="label">Change Direction<\/div>
                 <div class="value" style="color: {('#06b6d4' if predicted_price > current_price else '#ef4444')}">
                     {('↑ UP' if predicted_price > current_price else '↓ DOWN')}
-                </div>
-            </div>
+                <\/div>
+            <\/div>
             <div class="info-card">
-                <div class="label">Change Percent</div>
+                <div class="label">Change Percent<\/div>
                 <div class="value" style="color: {('#06b6d4' if predicted_price > current_price else '#ef4444')}">
                     {abs((predicted_price - current_price) / current_price * 100):.2f}%
-                </div>
-            </div>
-        </div>
-    </div>
+                <\/div>
+            <\/div>
+        <\/div>
+    <\/div>
     
     <script>
-        // Full data from server
-        const fullPrices = {json.dumps([float(p) for p in prices])};
+        // Full data from server - EXACTLY what the API sent
+        const fullPrices = {json.dumps([float(p) for p in prices_list])};
         const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_full])};
         const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_full])};
         const predictedPrice = {json.dumps(float(predicted_price))};
         const currentPrice = {json.dumps(float(current_price))};
         
-        // Display configuration
-        const displayCount = 40;
-        const startIdx = Math.max(0, fullPrices.length - displayCount);
+        // CRITICAL FIX: Display ALL prices received, no filtering
+        const displayPrices = fullPrices;  // Use ALL prices
+        const displayMA7 = ma7Data;        // Use ALL MA7 points
+        const displayMA21 = ma21Data;      // Use ALL MA21 points
         
-        // Extract display data
-        const displayPrices = fullPrices.slice(startIdx);
-        const displayMA7 = ma7Data.slice(startIdx);
-        const displayMA21 = ma21Data.slice(startIdx);
-        
-        // Generate labels for displayed range
+        // Generate labels for ALL data points
         const labels = [];
         for (let i = 0; i < displayPrices.length; i++) {{
-            labels.push(`K${{startIdx + i + 1}}`);
+            labels.push(`K${{i + 1}}`);
         }}
         labels.push('K+1'); // Prediction point
         
-        // Prepare historical prices (only displayed portion)
+        console.log('Data consistency check (JavaScript):');
+        console.log(`  - Full prices length: ${{fullPrices.length}}`);
+        console.log(`  - Display prices length: ${{displayPrices.length}}`);
+        console.log(`  - Labels length: ${{labels.length}}`);
+        console.log(`  - Current price: ${{currentPrice.toFixed(2)}}`);
+        console.log(`  - Predicted price: ${{predictedPrice.toFixed(2)}}`);
+        
+        // Prepare historical prices (all received data)
         const historicalPrices = displayPrices;
         
         // Prepare predicted prices (None for historical, then current + predicted)
@@ -404,12 +445,10 @@ class ChartGenerator:
             }}
         }});
         
-        console.log('Chart rendered successfully');
-        console.log(`Display range: K${{startIdx + 1}} to K${{startIdx + displayCount}} (of ${{fullPrices.length}} total)');
-        console.log(`Prediction: ${{currentPrice.toFixed(2)}} -> ${{predictedPrice.toFixed(2)}}`);
-    </script>
-</body>
-</html>
+        console.log('Chart rendered successfully with', displayPrices.length, 'historical candles');
+    <\/script>
+<\/body>
+<\/html>
         """
         return html
     
@@ -443,8 +482,8 @@ class ChartGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Technical Indicators</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <title>Technical Indicators<\/title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"><\/script>
     <style>
         * {{
             margin: 0;
@@ -532,71 +571,66 @@ class ChartGenerator:
             color: #64748b;
             line-height: 1.6;
         }}
-    </style>
-</head>
-<body>
+    <\/style>
+<\/head>
+<\/body>
     <div class="container">
         <div class="header">
-            <h1>Technical Indicators Analysis</h1>
-        </div>
+            <h1>Technical Indicators Analysis<\/h1>
+        <\/div>
         
         <div class="indicators-grid">
-            <!-- RSI -->
             <div class="indicator-card">
-                <div class="indicator-title">RSI (14)</div>
-                <div class="indicator-value">{technical_indicators.get('RSI', 0):.1f}</div>
+                <div class="indicator-title">RSI (14)<\/div>
+                <div class="indicator-value">{technical_indicators.get('RSI', 0):.1f}<\/div>
                 <div class="indicator-bar">
-                    <div class="indicator-fill" style="width: {min(100, technical_indicators.get('RSI', 0))}%"></div>
-                </div>
+                    <div class="indicator-fill" style="width: {min(100, technical_indicators.get('RSI', 0))}%"><\/div>
+                <\/div>
                 <div class="indicator-description">
                     {ChartGenerator._get_rsi_description(technical_indicators.get('RSI', 0))}
-                </div>
-            </div>
+                <\/div>
+            <\/div>
             
-            <!-- MACD -->
             <div class="indicator-card">
-                <div class="indicator-title">MACD</div>
-                <div class="indicator-value">{technical_indicators.get('MACD', 0):.4f}</div>
+                <div class="indicator-title">MACD<\/div>
+                <div class="indicator-value">{technical_indicators.get('MACD', 0):.4f}<\/div>
                 <div class="indicator-bar">
-                    <div class="indicator-fill" style="width: {min(100, max(0, technical_indicators.get('MACD', 0) * 50 + 50))}%"></div>
-                </div>
+                    <div class="indicator-fill" style="width: {min(100, max(0, technical_indicators.get('MACD', 0) * 50 + 50))}%"><\/div>
+                <\/div>
                 <div class="indicator-description">
                     {ChartGenerator._get_macd_description(technical_indicators.get('MACD', 0))}
-                </div>
-            </div>
+                <\/div>
+            <\/div>
             
-            <!-- ADX -->
             <div class="indicator-card">
-                <div class="indicator-title">ADX (14)</div>
-                <div class="indicator-value">{technical_indicators.get('ADX', 0):.1f}</div>
+                <div class="indicator-title">ADX (14)<\/div>
+                <div class="indicator-value">{technical_indicators.get('ADX', 0):.1f}<\/div>
                 <div class="indicator-bar">
-                    <div class="indicator-fill" style="width: {min(100, technical_indicators.get('ADX', 0))}%"></div>
-                </div>
+                    <div class="indicator-fill" style="width: {min(100, technical_indicators.get('ADX', 0))}%"><\/div>
+                <\/div>
                 <div class="indicator-description">
                     {ChartGenerator._get_adx_description(technical_indicators.get('ADX', 0))}
-                </div>
-            </div>
+                <\/div>
+            <\/div>
             
-            <!-- ATR -->
             <div class="indicator-card">
-                <div class="indicator-title">ATR (14)</div>
-                <div class="indicator-value">{technical_indicators.get('ATR', 0):.4f}</div>
-                <div class="indicator-description">Average True Range for volatility assessment</div>
-            </div>
+                <div class="indicator-title">ATR (14)<\/div>
+                <div class="indicator-value">{technical_indicators.get('ATR', 0):.4f}<\/div>
+                <div class="indicator-description">Average True Range for volatility assessment<\/div>
+            <\/div>
             
-            <!-- Volatility -->
             <div class="indicator-card">
-                <div class="indicator-title">Volatility</div>
-                <div class="indicator-value">{technical_indicators.get('Volatility', 0):.4f}</div>
+                <div class="indicator-title">Volatility<\/div>
+                <div class="indicator-value">{technical_indicators.get('Volatility', 0):.4f}<\/div>
                 <div class="indicator-bar">
-                    <div class="indicator-fill" style="width: {min(100, technical_indicators.get('Volatility', 0) * 1000)}%"></div>
-                </div>
-                <div class="indicator-description">Historical price volatility</div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
+                    <div class="indicator-fill" style="width: {min(100, technical_indicators.get('Volatility', 0) * 1000)}%"><\/div>
+                <\/div>
+                <div class="indicator-description">Historical price volatility<\/div>
+            <\/div>
+        <\/div>
+    <\/div>
+<\/body>
+<\/html>
         """
         return html
     
@@ -630,16 +664,3 @@ class ChartGenerator:
             return "Weak Trend"
         else:
             return "No Trend - Range Bound"
-
-
-if __name__ == "__main__":
-    # Example usage
-    sample_prices = [82000, 82500, 82200, 82800, 82300, 83000, 82900, 83200, 83100]
-    sample_predicted = 83500
-    
-    html = ChartGenerator.generate_price_chart(sample_prices, sample_predicted, "BTCUSDT", "1d")
-    
-    with open("price_chart.html", "w") as f:
-        f.write(html)
-    
-    print("Chart generated: price_chart.html")
