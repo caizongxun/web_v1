@@ -2,8 +2,8 @@
 const API_BASE_URL = 'http://localhost:8001';
 const API_ENDPOINTS = {
     predict: '/api/v6/predict',
-    candles: '/api/v6/candles',
-    technical: '/api/v6/technical',
+    chart: '/api/v6/chart',
+    technical: '/api/v6/indicators',
     supported_symbols: '/api/v6/symbols'
 };
 
@@ -127,8 +127,12 @@ async function handlePrediction(e) {
     resultsContainer.innerHTML = '';
     chartContainer.style.display = 'none';
 
+    console.log(`[PREDICTION] Starting prediction: ${crypto} ${timeframe} (${klinesCount}K)`);
+
     try {
-        const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.predict}`, {
+        // Step 1: Get prediction data
+        console.log(`[API] Calling ${API_BASE_URL}${API_ENDPOINTS.predict}`);
+        const predictResponse = await fetch(`${API_BASE_URL}${API_ENDPOINTS.predict}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -140,16 +144,69 @@ async function handlePrediction(e) {
             })
         });
 
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.statusText}`);
+        if (!predictResponse.ok) {
+            throw new Error(`Predict API Error: ${predictResponse.statusText}`);
         }
 
-        const data = await response.json();
-        currentPrediction = data;
-        displayResults(data);
+        const predictData = await predictResponse.json();
+        currentPrediction = predictData;
+        console.log(`[PREDICTION] Received data:`, {
+            symbol: predictData.symbol,
+            timeframe: predictData.timeframe,
+            klines_count: predictData.klines_count,
+            predicted_price: predictData.predicted_price
+        });
+        
+        // Display text results
+        displayResults(predictData);
         showAlert('Prediction completed successfully', 'success');
+
+        // Step 2: Get chart visualization
+        console.log(`[CHART] Calling ${API_BASE_URL}${API_ENDPOINTS.chart}`);
+        const chartResponse = await fetch(`${API_BASE_URL}${API_ENDPOINTS.chart}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                symbol: crypto + 'USDT',
+                timeframe: timeframe,
+                klines: klinesCount
+            })
+        });
+
+        if (!chartResponse.ok) {
+            throw new Error(`Chart API Error: ${chartResponse.statusText}`);
+        }
+
+        const chartHtml = await chartResponse.text();
+        console.log(`[CHART] Received HTML chart (${chartHtml.length} bytes)`);
+        displayChartHTML(chartHtml);
+
+        // Step 3: Get technical indicators
+        console.log(`[INDICATORS] Calling ${API_BASE_URL}${API_ENDPOINTS.technical}`);
+        const indicatorsResponse = await fetch(`${API_BASE_URL}${API_ENDPOINTS.technical}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                symbol: crypto + 'USDT',
+                timeframe: timeframe,
+                klines: klinesCount
+            })
+        });
+
+        if (!indicatorsResponse.ok) {
+            console.warn(`Indicators API warning: ${indicatorsResponse.statusText}`);
+        } else {
+            const indicatorsHtml = await indicatorsResponse.text();
+            console.log(`[INDICATORS] Received HTML indicators (${indicatorsHtml.length} bytes)`);
+            displayIndicatorsHTML(indicatorsHtml);
+        }
+
     } catch (error) {
-        console.error('Prediction error:', error);
+        console.error('[ERROR]', error);
         showAlert(`Error: ${error.message}`, 'error');
     } finally {
         loadingSpinner.style.display = 'none';
@@ -292,9 +349,30 @@ function displayResults(data) {
         </div>
     `;
     resultsContainer.appendChild(modelCard);
+}
 
-    // Display chart
-    displayChart(data);
+// Display chart as HTML (from /api/v6/chart)
+function displayChartHTML(html) {
+    console.log('[CHART] Rendering chart HTML');
+    chartContainer.style.display = 'block';
+    chartContainer.innerHTML = html;
+    
+    // Reload scripts in the newly inserted HTML
+    const scripts = chartContainer.getElementsByTagName('script');
+    for (let i = 0; i < scripts.length; i++) {
+        const newScript = document.createElement('script');
+        newScript.textContent = scripts[i].textContent;
+        document.body.appendChild(newScript);
+    }
+}
+
+// Display indicators as HTML (from /api/v6/indicators)
+function displayIndicatorsHTML(html) {
+    console.log('[INDICATORS] Rendering indicators HTML');
+    const indicatorsContainer = document.createElement('div');
+    indicatorsContainer.style.marginTop = '30px';
+    indicatorsContainer.innerHTML = html;
+    resultsContainer.appendChild(indicatorsContainer);
 }
 
 // Create a metric card
@@ -314,117 +392,6 @@ function createCard(title, metrics) {
     });
 
     return card;
-}
-
-// Display price prediction chart
-function displayChart(data) {
-    chartContainer.style.display = 'block';
-    const ctx = document.getElementById('predictionChart').getContext('2d');
-
-    // Historical prices (simulated)
-    const historicalPrices = data.historical_prices || generateHistoricalPrices(
-        data.current_price,
-        data.klines_count
-    );
-
-    // Create chart data
-    const chartData = {
-        labels: historicalPrices.map((_, i) => `K${i + 1}`),
-        datasets: [
-            {
-                label: 'Historical Price',
-                data: historicalPrices,
-                borderColor: '#8a2be2',
-                backgroundColor: 'rgba(138, 43, 226, 0.1)',
-                borderWidth: 2,
-                tension: 0.4,
-                fill: true,
-                pointRadius: 0,
-                pointHoverRadius: 5
-            },
-            {
-                label: 'Predicted Price',
-                data: [...historicalPrices.slice(-5), data.predicted_price],
-                borderColor: '#00bfff',
-                backgroundColor: 'rgba(0, 191, 255, 0.1)',
-                borderWidth: 2,
-                borderDash: [5, 5],
-                fill: false,
-                pointRadius: 4,
-                pointBackgroundColor: '#00bfff'
-            }
-        ]
-    };
-
-    // Destroy existing chart if it exists
-    if (chartInstance) {
-        chartInstance.destroy();
-    }
-
-    // Create new chart
-    chartInstance = new Chart(ctx, {
-        type: 'line',
-        data: chartData,
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            interaction: {
-                mode: 'index',
-                intersect: false
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        color: '#fff',
-                        font: { size: 12 }
-                    }
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    titleColor: '#fff',
-                    bodyColor: '#fff',
-                    borderColor: '#8a2be2',
-                    borderWidth: 1
-                }
-            },
-            scales: {
-                x: {
-                    grid: {
-                        color: 'rgba(138, 43, 226, 0.1)'
-                    },
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 0.7)',
-                        maxTicksLimit: 10
-                    }
-                },
-                y: {
-                    grid: {
-                        color: 'rgba(138, 43, 226, 0.1)'
-                    },
-                    ticks: {
-                        color: 'rgba(255, 255, 255, 0.7)',
-                        callback: function(value) {
-                            return '$' + value.toFixed(2);
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
-// Generate simulated historical prices for visualization
-function generateHistoricalPrices(currentPrice, count) {
-    const prices = [currentPrice];
-    let price = currentPrice;
-
-    for (let i = 1; i < count; i++) {
-        const change = (Math.random() - 0.5) * 0.02;
-        price = price * (1 + change);
-        prices.unshift(price);
-    }
-
-    return prices;
 }
 
 // Show alert message
