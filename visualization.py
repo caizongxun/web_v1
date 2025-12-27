@@ -170,6 +170,7 @@ class ChartGenerator:
 </div>
 
 <script>
+(function() {{
     // Full data from server - EXACTLY what the API sent
     const fullPrices = {prices_json};
     const ma7Data = {ma7_json};
@@ -347,6 +348,7 @@ class ChartGenerator:
     }} else {{
         initChart();
     }}
+}})();
 </script>
 """
         return html
