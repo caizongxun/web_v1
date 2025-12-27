@@ -5,7 +5,7 @@ Hybrid Model: LSTM (50%) + GRU (30%) + XGBoost (20%)
 With Real-time Data from Binance and yfinance
 
 Author: CPB Team
-Version: 6.1
+Version: 6.2
 Port: 8001
 """
 
@@ -36,7 +36,7 @@ DEFAULT_CACHE_ENABLED = os.getenv('CACHE_ENABLED', 'true').lower() == 'true'
 
 # V6 Model Configuration
 MODEL_CONFIG = {
-    'version': 'V6',
+    'version': 'V6.2',
     'lstm_weight': 0.5,
     'gru_weight': 0.3,
     'xgboost_weight': 0.2,
@@ -83,6 +83,7 @@ class V6Model:
         """
         Make prediction using hybrid model
         Returns: (predicted_price, confidence)
+        DETERMINISTIC: Same input always produces same output (no randomness)
         """
         # Simulate model predictions (in production, use actual trained models)
         lstm_pred = self._lstm_predict(prices, technical_indicators)
@@ -96,7 +97,7 @@ class V6Model:
             xgboost_pred * self.config['xgboost_weight']
         )
         
-        # Calculate confidence
+        # Calculate confidence - DETERMINISTIC
         predictions = np.array([lstm_pred, gru_pred, xgboost_pred])
         std = np.std(predictions)
         confidence = max(0.0, min(1.0, 1.0 - std / final_pred)) if final_pred != 0 else 0.5
@@ -104,38 +105,74 @@ class V6Model:
         return float(final_pred), float(confidence)
     
     def _lstm_predict(self, prices, indicators):
-        """LSTM component"""
-        trend = np.polyfit(range(len(prices)), prices, 1)[0]
-        momentum = (prices[-1] - prices[0]) / prices[0]
+        """LSTM component - Improved stability"""
+        prices = np.array(prices, dtype=float)
         
-        pred = prices[-1] * (1 + momentum * 0.3 + trend / prices[-1] * 0.1)
+        # Use recent prices (last 20) for trend calculation
+        recent_prices = prices[-20:] if len(prices) >= 20 else prices
+        
+        # Linear regression trend (more stable than polyfit)
+        x = np.arange(len(recent_prices))
+        trend = np.polyfit(x, recent_prices, 1)[0]
+        
+        # Recent momentum (last 5 candles)
+        momentum_recent = (prices[-1] - prices[-5]) / prices[-5] if len(prices) >= 5 else 0
+        
+        # Reduced sensitivity to noise - use smaller multiplier
+        pred = prices[-1] * (1 + momentum_recent * 0.1 + trend / prices[-1] * 0.02)
         return float(pred)
     
     def _gru_predict(self, prices, indicators):
-        """GRU component"""
+        """GRU component - Mean reversion focus"""
+        prices = np.array(prices, dtype=float)
+        
+        # Calculate EMAs with proper sizing
         ema_12 = self._calculate_ema(prices, 12)
         ema_26 = self._calculate_ema(prices, 26)
         
-        trend_strength = (ema_12[-1] - ema_26[-1]) / prices[-1]
-        pred = prices[-1] * (1 + trend_strength * 0.25)
+        # EMA difference as trend indicator
+        ema_diff = ema_12[-1] - ema_26[-1]
+        trend_strength = ema_diff / prices[-1]
+        
+        # Mean reversion component - price vs MA
+        sma_20 = np.mean(prices[-20:]) if len(prices) >= 20 else np.mean(prices)
+        mean_reversion = (sma_20 - prices[-1]) / prices[-1] * 0.05  # Mild reversion
+        
+        pred = prices[-1] * (1 + trend_strength * 0.12 + mean_reversion)
         return float(pred)
     
     def _xgboost_predict(self, prices, volumes, indicators):
-        """XGBoost component"""
+        """XGBoost component - RSI and MACD signals"""
         rsi = indicators.get('RSI', 50)
         macd = indicators.get('MACD', 0)
+        atr = indicators.get('ATR', 0)
         
-        # RSI-based mean reversion
-        rsi_signal = (50 - rsi) / 100
-        macd_signal = np.sign(macd) * min(1, abs(macd))
+        prices = np.array(prices, dtype=float)
         
-        pred = prices[-1] * (1 + rsi_signal * 0.1 + macd_signal * 0.15)
+        # RSI-based mean reversion (opposite direction when extreme)
+        rsi_signal = 0
+        if rsi > 70:  # Overbought
+            rsi_signal = -0.03  # Small downward pressure
+        elif rsi < 30:  # Oversold
+            rsi_signal = 0.03  # Small upward pressure
+        
+        # MACD signal (reduced sensitivity)
+        macd_signal = np.tanh(macd / atr) * 0.05 if atr > 0 else 0  # Bounded [-0.05, 0.05]
+        
+        # Volatility adjustment - in high volatility, reduce prediction movement
+        volatility = indicators.get('Volatility', 0.01)
+        vol_multiplier = 1.0 / (1.0 + volatility * 10)  # Reduces movement in high vol
+        
+        pred = prices[-1] * (1 + (rsi_signal + macd_signal) * vol_multiplier)
         return float(pred)
     
     @staticmethod
     def _calculate_ema(prices, period):
         """Calculate Exponential Moving Average"""
-        prices = np.array(prices)
+        prices = np.array(prices, dtype=float)
+        if len(prices) == 0:
+            return np.array([])
+        
         ema = np.zeros_like(prices)
         ema[0] = prices[0]
         alpha = 2 / (period + 1)
@@ -152,6 +189,9 @@ class TechnicalIndicators:
     def calculate_rsi(prices, period=14):
         """Relative Strength Index"""
         prices = np.array(prices)
+        if len(prices) < 2:
+            return 50.0
+        
         deltas = np.diff(prices)
         
         gains = np.where(deltas > 0, deltas, 0)
@@ -171,6 +211,8 @@ class TechnicalIndicators:
     def calculate_macd(prices, fast=12, slow=26, signal=9):
         """MACD (Moving Average Convergence Divergence)"""
         prices = np.array(prices)
+        if len(prices) < slow:
+            return 0.0
         
         ema_fast = TechnicalIndicators._ema(prices, fast)
         ema_slow = TechnicalIndicators._ema(prices, slow)
@@ -187,6 +229,9 @@ class TechnicalIndicators:
         
         # Ensure all arrays have the same length
         min_len = min(len(high), len(low), len(close))
+        if min_len < 2:
+            return 50.0
+        
         high = high[-min_len:]
         low = low[-min_len:]
         close = close[-min_len:]
@@ -206,6 +251,9 @@ class TechnicalIndicators:
         
         # Ensure all arrays have the same length
         min_len = min(len(high), len(low), len(close))
+        if min_len < 1:
+            return 0.0
+        
         high = high[-min_len:]
         low = low[-min_len:]
         close = close[-min_len:]
@@ -237,6 +285,9 @@ class TechnicalIndicators:
     def _ema(prices, period):
         """Calculate EMA"""
         prices = np.array(prices, dtype=float)
+        if len(prices) == 0:
+            return np.array([])
+        
         ema = np.zeros_like(prices)
         ema[0] = prices[0]
         alpha = 2 / (period + 1)
@@ -283,6 +334,11 @@ class RiskManager:
         
         # Check price direction
         price_up = predicted_price > current_price
+        price_change_pct = abs((predicted_price - current_price) / current_price * 100)
+        
+        # Only generate signals for meaningful changes (>0.5%)
+        if price_change_pct < 0.5:
+            return 'HOLD'
         
         # RSI signals
         rsi_bullish = rsi < 70
@@ -314,8 +370,10 @@ def predict():
         "source": "binance"  (optional, default: binance)
     }
     
-    IMPORTANT: Uses the previous completed candle for prediction,
-    not the current incomplete candle being formed.
+    IMPORTANT: 
+    - Uses the previous completed candle for prediction
+    - Model is DETERMINISTIC - same input always produces same output
+    - Improved stability and reduced false signals
     """
     try:
         data = request.get_json()
@@ -412,14 +470,17 @@ def predict():
         
         # Volatility assessment
         current_vol = TechnicalIndicators.calculate_volatility(prediction_prices[-20:])
-        predicted_vol = indicators['Volatility'] * np.random.uniform(0.9, 1.1)
+        predicted_vol = indicators['Volatility']  # No randomness
         
-        # Model predictions
+        # Model predictions (deterministic)
         model_predictions = {
             'LSTM': float(model._lstm_predict(prediction_prices, indicators)),
             'GRU': float(model._gru_predict(prediction_prices, indicators)),
             'XGBoost': float(model._xgboost_predict(prediction_prices, prediction_volumes, indicators))
         }
+        
+        # Calculate prediction change percentage
+        price_change_pct = ((predicted_price - last_completed_price) / last_completed_price) * 100
         
         # Response
         response = {
@@ -430,6 +491,7 @@ def predict():
             'last_completed_price': float(last_completed_price),
             'current_price': float(current_price),
             'predicted_price': float(predicted_price),
+            'price_change_pct': float(price_change_pct),
             'confidence': float(confidence),
             'recommendation': recommendation,
             'entry_price': float(entry_price),
@@ -449,11 +511,17 @@ def predict():
             'model_predictions': model_predictions,
             'model_config': MODEL_CONFIG,
             'accuracy': ACCURACY[timeframe],
-            'prediction_note': 'Prediction is based on the last completed candle, not the current incomplete candle',
+            'model_notes': [
+                'Model is DETERMINISTIC - same input always produces same output',
+                'Reduced sensitivity to market noise',
+                'Mean reversion component added',
+                'Volatility adjustment applied',
+                'Only meaningful changes (>0.5%) trigger signals'
+            ],
             'timestamp': datetime.now().isoformat()
         }
         
-        logger.info(f'Prediction generated: {symbol} {timeframe} from {data_source_used} (using {len(prediction_prices)} completed candles)')
+        logger.info(f'Prediction generated: {symbol} {timeframe} from {data_source_used} (using {len(prediction_prices)} completed candles, change: {price_change_pct:.3f}%)')
         return jsonify(response), 200
         
     except Exception as e:
@@ -518,8 +586,7 @@ def generate_price_chart():
         model = V6Model()
         predicted_price, _ = model.predict(prediction_prices, prediction_volumes, indicators)
         
-        # For chart display, show last 40 of all available prices (including current)
-        # But pass all_prices to visualization for proper charting
+        # For chart display, show all prices
         html = ChartGenerator.generate_price_chart(all_prices, predicted_price, symbol, timeframe)
         
         logger.info(f'Chart generated: {symbol} {timeframe} (displaying {len(all_prices)} candles, prediction based on {len(prediction_prices)} completed)')
@@ -626,7 +693,7 @@ def index():
     """Root endpoint"""
     return jsonify({
         'name': 'CPB Crypto Predictor Web',
-        'version': 'V6.1',
+        'version': 'V6.2',
         'description': 'Advanced cryptocurrency price prediction API with real-time data',
         'data_sources': ['Binance API', 'yfinance'],
         'endpoints': {
@@ -640,9 +707,14 @@ def index():
     }), 200
 
 if __name__ == '__main__':
-    logger.info('Starting CPB Crypto Predictor V6.1 API Server')
+    logger.info('Starting CPB Crypto Predictor V6.2 API Server')
     logger.info(f'Model Config: {MODEL_CONFIG}')
     logger.info(f'Default Data Source: {DEFAULT_DATA_SOURCE}')
     logger.info(f'Cache Enabled: {DEFAULT_CACHE_ENABLED}')
-    logger.info('NOTE: Predictions use completed candles, not current incomplete candles')
+    logger.info('MODEL IMPROVEMENTS:')
+    logger.info('- Deterministic (no randomness)')
+    logger.info('- Reduced sensitivity to noise')
+    logger.info('- Mean reversion component')
+    logger.info('- Volatility adjustment')
+    logger.info('- Only meaningful signals (>0.5% change)')
     app.run(host='localhost', port=8001, debug=True)
