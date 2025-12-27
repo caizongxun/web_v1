@@ -8,11 +8,7 @@ Features:
 - JavaScript displays exactly what Python sends (no filtering that causes shifting)
 - No smoothing (tension: 0)
 - Better color schemes
-- Proper legend positioning
-- Technical indicators overlay
 - Responsive design
-
-CRITICAL: This version ensures 100% data consistency
 """
 
 import json
@@ -67,7 +63,14 @@ class ChartGenerator:
         logger.info(f"  - Current price: ${current_price:.2f}")
         logger.info(f"  - Predicted price: ${predicted_price:.2f}")
         
-        # HTML fragment (no body/html tags to avoid DOM conflicts)
+        # Prepare data for JSON
+        prices_json = json.dumps([float(p) for p in prices_list])
+        ma7_json = json.dumps([None if x is None else float(x) for x in ma7_full])
+        ma21_json = json.dumps([None if x is None else float(x) for x in ma21_full])
+        predicted_json = json.dumps(float(predicted_price))
+        current_json = json.dumps(float(current_price))
+        
+        # Build HTML with simple string formatting
         html = f"""
 <style>
     .chart-wrapper {{
@@ -168,35 +171,33 @@ class ChartGenerator:
 
 <script>
     // Full data from server - EXACTLY what the API sent
-    const fullPrices = {json.dumps([float(p) for p in prices_list])};
-    const ma7Data = {json.dumps([None if x is None else float(x) for x in ma7_full])};
-    const ma21Data = {json.dumps([None if x is None else float(x) for x in ma21_full])};
-    const predictedPrice = {json.dumps(float(predicted_price))};
-    const currentPrice = {json.dumps(float(current_price))};
+    const fullPrices = {prices_json};
+    const ma7Data = {ma7_json};
+    const ma21Data = {ma21_json};
+    const predictedPrice = {predicted_json};
+    const currentPrice = {current_json};
     
     // CRITICAL FIX: Display ALL prices received, no filtering
-    const displayPrices = fullPrices;  // Use ALL prices
-    const displayMA7 = ma7Data;        // Use ALL MA7 points
-    const displayMA21 = ma21Data;      // Use ALL MA21 points
+    const displayPrices = fullPrices;
+    const displayMA7 = ma7Data;
+    const displayMA21 = ma21Data;
     
     // Generate labels for ALL data points
     const labels = [];
     for (let i = 0; i < displayPrices.length; i++) {{
-        labels.push(`K${{i + 1}}`);
+        labels.push('K' + (i + 1));
     }}
-    labels.push('K+1'); // Prediction point
+    labels.push('K+1');
     
-    console.log('Data consistency check (JavaScript):');
-    console.log(`  - Full prices length: ${{fullPrices.length}}`);
-    console.log(`  - Display prices length: ${{displayPrices.length}}`);
-    console.log(`  - Labels length: ${{labels.length}}`);
-    console.log(`  - Current price: ${{currentPrice.toFixed(2)}}`);
-    console.log(`  - Predicted price: ${{predictedPrice.toFixed(2)}}`);
+    console.log('[CHART] Data consistency check (JavaScript):');
+    console.log('[CHART]   - Full prices length: ' + fullPrices.length);
+    console.log('[CHART]   - Display prices length: ' + displayPrices.length);
+    console.log('[CHART]   - Labels length: ' + labels.length);
     
-    // Prepare historical prices (all received data)
+    // Prepare historical prices
     const historicalPrices = displayPrices;
     
-    // Prepare predicted prices (None for historical, then current + predicted)
+    // Prepare predicted prices
     const predictedPrices = [];
     for (let i = 0; i < displayPrices.length; i++) {{
         predictedPrices.push(null);
@@ -204,17 +205,17 @@ class ChartGenerator:
     predictedPrices.push(currentPrice);
     predictedPrices.push(predictedPrice);
     
-    // Prepare MA data (extend with one null for prediction point)
+    // Prepare MA data
     const ma7Display = displayMA7.concat([null]);
     const ma21Display = displayMA21.concat([null]);
     
-    // Wait for Chart.js to be available
-    const initChart = () => {{
+    // Initialize chart
+    const initChart = function() {{
         if (typeof Chart === 'undefined') {{
             console.log('[CHART] Waiting for Chart.js to load...');
             setTimeout(initChart, 100);
             return;
-        }
+        }}
         
         try {{
             const canvas = document.getElementById('priceChart');
@@ -274,7 +275,6 @@ class ChartGenerator:
                             backgroundColor: 'transparent',
                             borderWidth: 2,
                             pointRadius: 0,
-                            pointHoverRadius: 4,
                             tension: 0,
                             fill: false,
                             spanGaps: true
@@ -286,7 +286,6 @@ class ChartGenerator:
                             backgroundColor: 'transparent',
                             borderWidth: 2,
                             pointRadius: 0,
-                            pointHoverRadius: 4,
                             tension: 0,
                             fill: false,
                             spanGaps: true
@@ -310,29 +309,7 @@ class ChartGenerator:
                             bodyColor: '#e0e0e0',
                             borderColor: 'rgba(255, 255, 255, 0.2)',
                             borderWidth: 1,
-                            padding: 12,
-                            titleFont: {{
-                                size: 14,
-                                weight: 'bold'
-                            }},
-                            bodyFont: {{
-                                size: 12
-                            }},
-                            callbacks: {{
-                                label: function(context) {{
-                                    let label = context.dataset.label || '';
-                                    if (label) {{
-                                        label += ': ';
-                                    }}
-                                    if (context.parsed.y !== null) {{
-                                        label += '$' + context.parsed.y.toLocaleString(undefined, {{
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2
-                                        }});
-                                    }}
-                                    return label;
-                                }}
-                            }}
+                            padding: 12
                         }}
                     }},
                     scales: {{
@@ -342,10 +319,7 @@ class ChartGenerator:
                                 drawBorder: false
                             }},
                             ticks: {{
-                                color: 'rgba(255, 255, 255, 0.6)',
-                                font: {{
-                                    size: 12
-                                }}
+                                color: 'rgba(255, 255, 255, 0.6)'
                             }}
                         }},
                         y: {{
@@ -354,20 +328,14 @@ class ChartGenerator:
                                 drawBorder: false
                             }},
                             ticks: {{
-                                color: 'rgba(255, 255, 255, 0.6)',
-                                font: {{
-                                    size: 12
-                                }},
-                                callback: function(value) {{
-                                    return '$' + value.toLocaleString();
-                                }}
+                                color: 'rgba(255, 255, 255, 0.6)'
                             }}
                         }}
                     }}
                 }}
             }});
             
-            console.log('[CHART] Chart rendered successfully with', displayPrices.length, 'historical candles');
+            console.log('[CHART] Chart rendered successfully');
         }} catch (err) {{
             console.error('[CHART] Error creating chart:', err);
         }}
@@ -380,7 +348,7 @@ class ChartGenerator:
         initChart();
     }}
 </script>
-        """
+"""
         return html
     
     @staticmethod
@@ -406,6 +374,16 @@ class ChartGenerator:
         Returns:
             HTML string with indicators dashboard (fragment, no body tags)
         """
+        
+        rsi = technical_indicators.get('RSI', 0)
+        macd = technical_indicators.get('MACD', 0)
+        adx = technical_indicators.get('ADX', 0)
+        atr = technical_indicators.get('ATR', 0)
+        volatility = technical_indicators.get('Volatility', 0)
+        
+        rsi_desc = ChartGenerator._get_rsi_description(rsi)
+        macd_desc = ChartGenerator._get_macd_description(macd)
+        adx_desc = ChartGenerator._get_adx_description(adx)
         
         html = f"""
 <style>
@@ -464,53 +442,47 @@ class ChartGenerator:
     }}
 </style>
 
-<h2 style="margin-bottom: 30px; background: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Technical Indicators Analysis</h2>
+<h2 style="margin-bottom: 30px;">Technical Indicators Analysis</h2>
 
 <div class="indicators-grid">
     <div class="indicator-card">
         <div class="indicator-title">RSI (14)</div>
-        <div class="indicator-value">{technical_indicators.get('RSI', 0):.1f}</div>
+        <div class="indicator-value">{rsi:.1f}</div>
         <div class="indicator-bar">
-            <div class="indicator-fill" style="width: {min(100, technical_indicators.get('RSI', 0))}%"></div>
+            <div class="indicator-fill" style="width: {min(100, rsi)}%"></div>
         </div>
-        <div class="indicator-description">
-            {ChartGenerator._get_rsi_description(technical_indicators.get('RSI', 0))}
-        </div>
+        <div class="indicator-description">{rsi_desc}</div>
     </div>
     
     <div class="indicator-card">
         <div class="indicator-title">MACD</div>
-        <div class="indicator-value">{technical_indicators.get('MACD', 0):.4f}</div>
+        <div class="indicator-value">{macd:.4f}</div>
         <div class="indicator-bar">
-            <div class="indicator-fill" style="width: {min(100, max(0, technical_indicators.get('MACD', 0) * 50 + 50))}%"></div>
+            <div class="indicator-fill" style="width: {min(100, max(0, macd * 50 + 50))}%"></div>
         </div>
-        <div class="indicator-description">
-            {ChartGenerator._get_macd_description(technical_indicators.get('MACD', 0))}
-        </div>
+        <div class="indicator-description">{macd_desc}</div>
     </div>
     
     <div class="indicator-card">
         <div class="indicator-title">ADX (14)</div>
-        <div class="indicator-value">{technical_indicators.get('ADX', 0):.1f}</div>
+        <div class="indicator-value">{adx:.1f}</div>
         <div class="indicator-bar">
-            <div class="indicator-fill" style="width: {min(100, technical_indicators.get('ADX', 0))}%"></div>
+            <div class="indicator-fill" style="width: {min(100, adx)}%"></div>
         </div>
-        <div class="indicator-description">
-            {ChartGenerator._get_adx_description(technical_indicators.get('ADX', 0))}
-        </div>
+        <div class="indicator-description">{adx_desc}</div>
     </div>
     
     <div class="indicator-card">
         <div class="indicator-title">ATR (14)</div>
-        <div class="indicator-value">{technical_indicators.get('ATR', 0):.4f}</div>
+        <div class="indicator-value">{atr:.4f}</div>
         <div class="indicator-description">Average True Range for volatility assessment</div>
     </div>
     
     <div class="indicator-card">
         <div class="indicator-title">Volatility</div>
-        <div class="indicator-value">{technical_indicators.get('Volatility', 0):.4f}</div>
+        <div class="indicator-value">{volatility:.4f}</div>
         <div class="indicator-bar">
-            <div class="indicator-fill" style="width: {min(100, technical_indicators.get('Volatility', 0) * 1000)}%"></div>
+            <div class="indicator-fill" style="width: {min(100, volatility * 1000)}%"></div>
         </div>
         <div class="indicator-description">Historical price volatility</div>
     </div>
