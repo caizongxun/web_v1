@@ -6,6 +6,7 @@ Provides improved chart generation for prediction results
 Features:
 - Fixed data consistency: Always shows EXACTLY the requested klines
 - JavaScript displays exactly what Python sends (no filtering that causes shifting)
+- Multi-step predictions: Shows future trajectory for 10 candles
 - No smoothing (tension: 0)
 - Better color schemes
 - Responsive design
@@ -22,16 +23,13 @@ class ChartGenerator:
     """Generate interactive charts for price predictions"""
     
     @staticmethod
-    def generate_price_chart(prices, predicted_price, symbol, timeframe):
+    def generate_price_chart(prices, predicted_prices, symbol, timeframe):
         """
         Generate interactive price prediction chart using Chart.js
         
-        CRITICAL FIX: This function receives EXACTLY the klines_count prices from app.py
-        and displays ALL of them, no filtering or shifting
-        
         Args:
             prices: List of historical prices (EXACTLY klines_count items)
-            predicted_price: Predicted next price
+            predicted_prices: List of predicted prices (10 items for future trajectory)
             symbol: Trading symbol (e.g., 'BTCUSDT')
             timeframe: Time frame (e.g., '1d')
         
@@ -46,7 +44,15 @@ class ChartGenerator:
         
         prices_list = list(prices)
         n_total = len(prices_list)
-        logger.info(f"Chart generation: symbol={symbol}, timeframe={timeframe}, prices_count={n_total}")
+        
+        # Ensure predicted_prices is a list
+        if isinstance(predicted_prices, (int, float)):
+            # Single prediction point - convert to 10-step forecast
+            predicted_prices = [predicted_prices]
+        predicted_prices_list = list(predicted_prices) if predicted_prices else []
+        n_predicted = len(predicted_prices_list)
+        
+        logger.info(f"Chart generation: symbol={symbol}, timeframe={timeframe}, historical={n_total}, predicted={n_predicted}")
         
         # Calculate moving averages on FULL dataset (all prices)
         ma7_full = ChartGenerator._calculate_ma(prices_list, 7)
@@ -57,18 +63,20 @@ class ChartGenerator:
         
         # Log data consistency
         logger.info(f"Data consistency check:")
-        logger.info(f"  - Total prices received: {n_total}")
+        logger.info(f"  - Total historical prices: {n_total}")
+        logger.info(f"  - Predicted future prices: {n_predicted}")
         logger.info(f"  - MA7 points: {len([x for x in ma7_full if x is not None])}")
         logger.info(f"  - MA21 points: {len([x for x in ma21_full if x is not None])}")
         logger.info(f"  - Current price: ${current_price:.2f}")
-        logger.info(f"  - Predicted price: ${predicted_price:.2f}")
+        if predicted_prices_list:
+            logger.info(f"  - First predicted price: ${predicted_prices_list[0]:.2f}")
+            logger.info(f"  - Last predicted price: ${predicted_prices_list[-1]:.2f}")
         
         # Prepare data for JSON
         prices_json = json.dumps([float(p) for p in prices_list])
         ma7_json = json.dumps([None if x is None else float(x) for x in ma7_full])
         ma21_json = json.dumps([None if x is None else float(x) for x in ma21_full])
-        predicted_json = json.dumps(float(predicted_price))
-        current_json = json.dumps(float(current_price))
+        predicted_json = json.dumps([float(p) for p in predicted_prices_list])
         
         # Build HTML with simple string formatting
         html = f"""
@@ -144,11 +152,11 @@ class ChartGenerator:
     <div class="chart-legend">
         <div class="legend-item">
             <div class="legend-color legend-historical"></div>
-            <span>Historical Price</span>
+            <span>Historical Price ({n_total} candles)</span>
         </div>
         <div class="legend-item">
             <div class="legend-color legend-predicted"></div>
-            <span>Predicted Price</span>
+            <span>Predicted Trajectory ({n_predicted} candles)</span>
         </div>
         <div class="legend-item">
             <div class="legend-color legend-ma7"></div>
@@ -165,50 +173,56 @@ class ChartGenerator:
     </div>
     
     <div class="data-info">
-        <strong>Data Consistency Info:</strong> Displaying exactly {n_total} historical candles + 1 predicted point
+        <strong>Data Consistency Info:</strong> Displaying {n_total} historical candles + {n_predicted} predicted future candles
     </div>
 </div>
 
 <script>
 (function() {{
     // Full data from server - EXACTLY what the API sent
-    const fullPrices = {prices_json};
+    const historicalPrices = {prices_json};
+    const predictedPrices = {predicted_json};
     const ma7Data = {ma7_json};
     const ma21Data = {ma21_json};
-    const predictedPrice = {predicted_json};
-    const currentPrice = {current_json};
-    
-    // CRITICAL FIX: Display ALL prices received, no filtering
-    const displayPrices = fullPrices;
-    const displayMA7 = ma7Data;
-    const displayMA21 = ma21Data;
-    
-    // Generate labels for ALL data points
-    const labels = [];
-    for (let i = 0; i < displayPrices.length; i++) {{
-        labels.push('K' + (i + 1));
-    }}
-    labels.push('K+1');
     
     console.log('[CHART] Data consistency check (JavaScript):');
-    console.log('[CHART]   - Full prices length: ' + fullPrices.length);
-    console.log('[CHART]   - Display prices length: ' + displayPrices.length);
-    console.log('[CHART]   - Labels length: ' + labels.length);
+    console.log('[CHART]   - Historical prices length: ' + historicalPrices.length);
+    console.log('[CHART]   - Predicted prices length: ' + predictedPrices.length);
+    console.log('[CHART]   - MA7 points: ' + ma7Data.filter(x => x !== null).length);
+    console.log('[CHART]   - MA21 points: ' + ma21Data.filter(x => x !== null).length);
     
-    // Prepare historical prices
-    const historicalPrices = displayPrices;
-    
-    // Prepare predicted prices
-    const predictedPrices = [];
-    for (let i = 0; i < displayPrices.length; i++) {{
-        predictedPrices.push(null);
+    // Generate labels for historical data points
+    const historicalLabels = [];
+    for (let i = 0; i < historicalPrices.length; i++) {{
+        historicalLabels.push('K' + (i + 1));
     }}
-    predictedPrices.push(currentPrice);
-    predictedPrices.push(predictedPrice);
     
-    // Prepare MA data
-    const ma7Display = displayMA7.concat([null]);
-    const ma21Display = displayMA21.concat([null]);
+    // Generate labels for predicted data points
+    const predictedLabels = [];
+    for (let i = 0; i < predictedPrices.length; i++) {{
+        predictedLabels.push('K+' + (i + 1));
+    }}
+    
+    // Combine all labels
+    const allLabels = historicalLabels.concat(predictedLabels);
+    
+    console.log('[CHART] Total labels: ' + allLabels.length);
+    console.log('[CHART] First predicted label: ' + (predictedLabels.length > 0 ? predictedLabels[0] : 'none'));
+    
+    // Prepare chart data
+    // Historical prices: show all historical
+    const chartHistoricalPrices = historicalPrices.concat(Array(predictedPrices.length).fill(null));
+    
+    // Predicted prices: null for historical, then all predicted
+    const chartPredictedPrices = Array(historicalPrices.length).fill(null).concat(predictedPrices);
+    
+    // MA data: extend with nulls for predicted period
+    const chartMA7 = ma7Data.concat(Array(predictedPrices.length).fill(null));
+    const chartMA21 = ma21Data.concat(Array(predictedPrices.length).fill(null));
+    
+    console.log('[CHART] Chart historical prices length: ' + chartHistoricalPrices.length);
+    console.log('[CHART] Chart predicted prices length: ' + chartPredictedPrices.length);
+    console.log('[CHART] Chart MA7 length: ' + chartMA7.length);
     
     // Initialize chart
     const initChart = function() {{
@@ -236,11 +250,11 @@ class ChartGenerator:
             const chart = new Chart(ctx, {{
                 type: 'line',
                 data: {{
-                    labels: labels,
+                    labels: allLabels,
                     datasets: [
                         {{
                             label: 'Historical Price',
-                            data: historicalPrices,
+                            data: chartHistoricalPrices,
                             borderColor: '#a855f7',
                             backgroundColor: 'rgba(168, 85, 247, 0.1)',
                             borderWidth: 3,
@@ -254,8 +268,8 @@ class ChartGenerator:
                             spanGaps: false
                         }},
                         {{
-                            label: 'Predicted Price',
-                            data: predictedPrices,
+                            label: 'Predicted Trajectory',
+                            data: chartPredictedPrices,
                             borderColor: '#06b6d4',
                             backgroundColor: 'rgba(6, 182, 212, 0.05)',
                             borderWidth: 3,
@@ -271,7 +285,7 @@ class ChartGenerator:
                         }},
                         {{
                             label: 'MA(7)',
-                            data: ma7Display,
+                            data: chartMA7,
                             borderColor: 'rgba(34, 197, 94, 0.6)',
                             backgroundColor: 'transparent',
                             borderWidth: 2,
@@ -282,7 +296,7 @@ class ChartGenerator:
                         }},
                         {{
                             label: 'MA(21)',
-                            data: ma21Display,
+                            data: chartMA21,
                             borderColor: 'rgba(245, 158, 11, 0.6)',
                             backgroundColor: 'transparent',
                             borderWidth: 2,
@@ -336,7 +350,7 @@ class ChartGenerator:
                 }}
             }});
             
-            console.log('[CHART] Chart rendered successfully');
+            console.log('[CHART] Chart rendered successfully with historical and predicted data');
         }} catch (err) {{
             console.error('[CHART] Error creating chart:', err);
         }}
