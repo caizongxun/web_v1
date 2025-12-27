@@ -33,6 +33,7 @@ CORS(app)
 # Configuration
 DEFAULT_DATA_SOURCE = os.getenv('DATA_SOURCE', 'binance')  # 'binance' or 'yfinance'
 DEFAULT_CACHE_ENABLED = os.getenv('CACHE_ENABLED', 'true').lower() == 'true'
+PREDICTION_STEPS = 10  # Predict 10 candles ahead
 
 # V6 Model Configuration
 MODEL_CONFIG = {
@@ -44,7 +45,8 @@ MODEL_CONFIG = {
     'gru_layers': [96, 48],
     'xgboost_depth': 6,
     'xgboost_learning_rate': 0.1,
-    'xgboost_n_estimators': 200
+    'xgboost_n_estimators': 200,
+    'prediction_steps': PREDICTION_STEPS
 }
 
 # Supported cryptocurrencies
@@ -103,6 +105,37 @@ class V6Model:
         confidence = max(0.0, min(1.0, 1.0 - std / final_pred)) if final_pred != 0 else 0.5
         
         return float(final_pred), float(confidence)
+    
+    def predict_multi_step(self, prices, volumes, technical_indicators, steps=10):
+        """
+        Make multi-step predictions (predicting future trajectory)
+        Returns: list of predicted prices
+        """
+        predictions = []
+        current_prices = list(prices)
+        
+        for step in range(steps):
+            # Predict next step
+            next_pred, _ = self.predict(current_prices, volumes, technical_indicators)
+            predictions.append(next_pred)
+            
+            # Update prices for next iteration (use predicted value)
+            current_prices.append(next_pred)
+            
+            # Recalculate indicators based on updated prices
+            if len(current_prices) > 1:
+                technical_indicators = {
+                    'RSI': TechnicalIndicators.calculate_rsi(current_prices),
+                    'MACD': TechnicalIndicators.calculate_macd(current_prices),
+                    'ATR': TechnicalIndicators.calculate_atr(
+                        np.array(current_prices), 
+                        np.array(current_prices) * 0.99,  # Approximate highs/lows
+                        np.array(current_prices)
+                    ),
+                    'Volatility': TechnicalIndicators.calculate_volatility(current_prices)
+                }
+        
+        return predictions
     
     def _lstm_predict(self, prices, indicators):
         """LSTM component - Improved stability"""
@@ -531,8 +564,8 @@ def predict():
 @app.route('/api/v6/chart', methods=['POST'])
 def generate_price_chart():
     """
-    Generate interactive price prediction chart
-    CRITICAL: Returns EXACTLY klines_count data points for consistency
+    Generate interactive price prediction chart with multi-step future predictions
+    CRITICAL: Returns EXACTLY klines_count data points + 10 predicted points for consistency
     """
     try:
         data = request.get_json()
@@ -582,12 +615,16 @@ def generate_price_chart():
         }
         
         model = V6Model()
-        predicted_price, _ = model.predict(prediction_prices, prediction_volumes, indicators)
         
-        # Generate chart with EXACTLY klines_count prices
-        html = ChartGenerator.generate_price_chart(all_prices, predicted_price, symbol, timeframe)
+        # Generate multi-step predictions (10 candles ahead)
+        future_predictions = model.predict_multi_step(prediction_prices, prediction_volumes, indicators, steps=PREDICTION_STEPS)
         
-        logger.info(f'Chart generated: {symbol} {timeframe} | Data points: {len(all_prices)}')
+        logger.info(f'Generated {len(future_predictions)} future predictions: {future_predictions}')
+        
+        # Generate chart with historical prices + predicted trajectory
+        html = ChartGenerator.generate_price_chart(all_prices, future_predictions, symbol, timeframe)
+        
+        logger.info(f'Chart generated: {symbol} {timeframe} | Historical: {len(all_prices)} | Predicted: {len(future_predictions)}')
         return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
         
     except Exception as e:
@@ -654,7 +691,8 @@ def get_supported_symbols():
         'timeframes': list(ACCURACY.keys()),
         'accuracy': ACCURACY,
         'kline_ranges': KLINE_RANGES,
-        'data_sources': ['binance', 'yfinance']
+        'data_sources': ['binance', 'yfinance'],
+        'prediction_steps': PREDICTION_STEPS
     }
     return jsonify(response), 200
 
@@ -683,10 +721,11 @@ def index():
     return jsonify({
         'name': 'CPB Crypto Predictor Web',
         'version': 'V6.2',
-        'description': 'Advanced cryptocurrency price prediction API'
+        'description': 'Advanced cryptocurrency price prediction API with multi-step forecasting'
     }), 200
 
 if __name__ == '__main__':
     logger.info('Starting CPB Crypto Predictor V6.2 API Server')
     logger.info('Data consistency check enabled')
+    logger.info(f'Multi-step prediction enabled: {PREDICTION_STEPS} candles ahead')
     app.run(host='localhost', port=8001, debug=True)
