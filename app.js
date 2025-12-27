@@ -351,28 +351,78 @@ function displayResults(data) {
     resultsContainer.appendChild(modelCard);
 }
 
-// Display chart as HTML (from /api/v6/chart)
+// Display chart as HTML (from /api/v6/chart) - FIXED HTML insertion
 function displayChartHTML(html) {
     console.log('[CHART] Rendering chart HTML');
     chartContainer.style.display = 'block';
-    chartContainer.innerHTML = html;
     
-    // Reload scripts in the newly inserted HTML
-    const scripts = chartContainer.getElementsByTagName('script');
-    for (let i = 0; i < scripts.length; i++) {
-        const newScript = document.createElement('script');
-        newScript.textContent = scripts[i].textContent;
-        document.body.appendChild(newScript);
+    try {
+        // Use innerHTML directly - simpler and avoids script parsing issues
+        chartContainer.innerHTML = html;
+        console.log('[CHART] Chart HTML inserted successfully');
+        
+        // Ensure scripts in the container are executed
+        const scripts = chartContainer.querySelectorAll('script');
+        console.log(`[CHART] Found ${scripts.length} script tags`);
+        
+        scripts.forEach((script) => {
+            try {
+                // Create a new script element and copy attributes
+                const newScript = document.createElement('script');
+                
+                // Copy all attributes
+                Array.from(script.attributes).forEach(attr => {
+                    newScript.setAttribute(attr.name, attr.value);
+                });
+                
+                // Copy content
+                if (script.textContent) {
+                    newScript.textContent = script.textContent;
+                }
+                
+                // Insert and execute
+                document.body.appendChild(newScript);
+                console.log('[CHART] Script executed');
+            } catch (err) {
+                console.error('[CHART] Script execution error:', err);
+            }
+        });
+        
+    } catch (err) {
+        console.error('[CHART] Failed to insert chart HTML:', err);
+        chartContainer.innerHTML = `<div style="color: red; padding: 20px;">Error rendering chart: ${err.message}</div>`;
     }
 }
 
 // Display indicators as HTML (from /api/v6/indicators)
 function displayIndicatorsHTML(html) {
     console.log('[INDICATORS] Rendering indicators HTML');
-    const indicatorsContainer = document.createElement('div');
-    indicatorsContainer.style.marginTop = '30px';
-    indicatorsContainer.innerHTML = html;
-    resultsContainer.appendChild(indicatorsContainer);
+    try {
+        const indicatorsContainer = document.createElement('div');
+        indicatorsContainer.style.marginTop = '30px';
+        indicatorsContainer.innerHTML = html;
+        resultsContainer.appendChild(indicatorsContainer);
+        console.log('[INDICATORS] Indicators inserted successfully');
+        
+        // Execute any scripts in indicators
+        const scripts = indicatorsContainer.querySelectorAll('script');
+        scripts.forEach((script) => {
+            try {
+                const newScript = document.createElement('script');
+                Array.from(script.attributes).forEach(attr => {
+                    newScript.setAttribute(attr.name, attr.value);
+                });
+                if (script.textContent) {
+                    newScript.textContent = script.textContent;
+                }
+                document.body.appendChild(newScript);
+            } catch (err) {
+                console.error('[INDICATORS] Script execution error:', err);
+            }
+        });
+    } catch (err) {
+        console.error('[INDICATORS] Failed to insert indicators HTML:', err);
+    }
 }
 
 // Create a metric card
