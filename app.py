@@ -369,11 +369,6 @@ def predict():
         "klines": 100,
         "source": "binance"  (optional, default: binance)
     }
-    
-    IMPORTANT: 
-    - Uses the previous completed candle for prediction
-    - Model is DETERMINISTIC - same input always produces same output
-    - Improved stability and reduced false signals
     """
     try:
         data = request.get_json()
@@ -435,12 +430,24 @@ def predict():
         lows = market_data['lows']
         current_price = market_data['current_price']
         
-        # IMPORTANT: Use only up to (klines_count - 1) to exclude the current incomplete candle
-        # This ensures we only use completed, fully-formed candles for prediction
-        prediction_prices = prices[-(klines_count-1):] if len(prices) >= klines_count else prices
-        prediction_volumes = volumes[-(klines_count-1):] if len(volumes) >= klines_count else volumes
-        prediction_highs = highs[-(klines_count-1):] if len(highs) >= klines_count else highs
-        prediction_lows = lows[-(klines_count-1):] if len(lows) >= klines_count else lows
+        # CRITICAL FIX: Ensure exactly klines_count prices for consistency
+        prices = prices[-klines_count:] if len(prices) >= klines_count else prices
+        volumes = volumes[-klines_count:] if len(volumes) >= klines_count else volumes
+        highs = highs[-klines_count:] if len(highs) >= klines_count else highs
+        lows = lows[-klines_count:] if len(lows) >= klines_count else lows
+        
+        # Verify we have exactly klines_count data points
+        actual_klines = len(prices)
+        if actual_klines < min_k:
+            return jsonify({
+                'error': f'Insufficient data: got {actual_klines}, need at least {min_k}'
+            }), 502
+        
+        # Use only completed candles (exclude current incomplete candle)
+        prediction_prices = prices[:-1] if len(prices) > 1 else prices
+        prediction_volumes = volumes[:-1] if len(volumes) > 1 else volumes
+        prediction_highs = highs[:-1] if len(highs) > 1 else highs
+        prediction_lows = lows[:-1] if len(lows) > 1 else lows
         
         # The last completed candle becomes our reference
         last_completed_price = prediction_prices[-1]
@@ -470,7 +477,7 @@ def predict():
         
         # Volatility assessment
         current_vol = TechnicalIndicators.calculate_volatility(prediction_prices[-20:])
-        predicted_vol = indicators['Volatility']  # No randomness
+        predicted_vol = indicators['Volatility']
         
         # Model predictions (deterministic)
         model_predictions = {
@@ -486,7 +493,7 @@ def predict():
         response = {
             'symbol': symbol,
             'timeframe': timeframe,
-            'klines_count': klines_count,
+            'klines_count': actual_klines,
             'data_source': data_source_used,
             'last_completed_price': float(last_completed_price),
             'current_price': float(current_price),
@@ -511,17 +518,10 @@ def predict():
             'model_predictions': model_predictions,
             'model_config': MODEL_CONFIG,
             'accuracy': ACCURACY[timeframe],
-            'model_notes': [
-                'Model is DETERMINISTIC - same input always produces same output',
-                'Reduced sensitivity to market noise',
-                'Mean reversion component added',
-                'Volatility adjustment applied',
-                'Only meaningful changes (>0.5%) trigger signals'
-            ],
             'timestamp': datetime.now().isoformat()
         }
         
-        logger.info(f'Prediction generated: {symbol} {timeframe} from {data_source_used} (using {len(prediction_prices)} completed candles, change: {price_change_pct:.3f}%)')
+        logger.info(f'Prediction: {symbol} {timeframe} | Data: {actual_klines}K | Change: {price_change_pct:.3f}% | Signal: {recommendation}')
         return jsonify(response), 200
         
     except Exception as e:
@@ -532,21 +532,16 @@ def predict():
 def generate_price_chart():
     """
     Generate interactive price prediction chart
-    Expected JSON: Same as /api/v6/predict
-    Returns: HTML page with embedded Chart.js visualization
+    CRITICAL: Returns EXACTLY klines_count data points for consistency
     """
     try:
         data = request.get_json()
         
-        # Get prediction data first
         symbol = data.get('symbol', '').upper()
         timeframe = data.get('timeframe', '1d')
         klines_count = data.get('klines', 100)
         data_source = data.get('source', DEFAULT_DATA_SOURCE).lower()
         use_cache = data.get('cache', DEFAULT_CACHE_ENABLED)
-        
-        # Extract crypto symbol
-        crypto = symbol.replace('USDT', '').replace('BUSD', '')
         
         # Get market data
         cache_key = f"{data_source}:{symbol}:{timeframe}:{klines_count}"
@@ -563,17 +558,20 @@ def generate_price_chart():
         if not DataFetcher.validate_data(market_data):
             return jsonify({'error': 'Invalid market data'}), 502
         
-        # Extract all data
+        # CRITICAL FIX: Ensure exactly klines_count data points
         all_prices = list(market_data['prices'][-klines_count:])
-        volumes = market_data['volumes']
-        highs = market_data['highs']
-        lows = market_data['lows']
+        volumes = market_data['volumes'][-klines_count:]
+        highs = market_data['highs'][-klines_count:]
+        lows = market_data['lows'][-klines_count:]
+        
+        # Log data consistency
+        logger.info(f'Chart data: {symbol} {timeframe} | Prices: {len(all_prices)} | Volumes: {len(volumes)} | Highs: {len(highs)} | Lows: {len(lows)}')
         
         # Use completed candles for prediction (exclude current incomplete)
         prediction_prices = all_prices[:-1] if len(all_prices) > 1 else all_prices
-        prediction_volumes = volumes[-len(prediction_prices):]
-        prediction_highs = highs[-len(prediction_prices):]
-        prediction_lows = lows[-len(prediction_prices):]
+        prediction_volumes = volumes[-len(prediction_prices):] if len(volumes) >= len(prediction_prices) else volumes
+        prediction_highs = highs[-len(prediction_prices):] if len(highs) >= len(prediction_prices) else highs
+        prediction_lows = lows[-len(prediction_prices):] if len(lows) >= len(prediction_prices) else lows
         
         indicators = {
             'RSI': TechnicalIndicators.calculate_rsi(prediction_prices),
@@ -586,10 +584,10 @@ def generate_price_chart():
         model = V6Model()
         predicted_price, _ = model.predict(prediction_prices, prediction_volumes, indicators)
         
-        # For chart display, show all prices
+        # Generate chart with EXACTLY klines_count prices
         html = ChartGenerator.generate_price_chart(all_prices, predicted_price, symbol, timeframe)
         
-        logger.info(f'Chart generated: {symbol} {timeframe} (displaying {len(all_prices)} candles, prediction based on {len(prediction_prices)} completed)')
+        logger.info(f'Chart generated: {symbol} {timeframe} | Data points: {len(all_prices)}')
         return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
         
     except Exception as e:
@@ -598,21 +596,16 @@ def generate_price_chart():
 
 @app.route('/api/v6/indicators', methods=['POST'])
 def technical_indicators_dashboard():
-    """
-    Generate technical indicators dashboard
-    Returns: HTML page with technical indicators visualization
-    """
+    """Generate technical indicators dashboard"""
     try:
         data = request.get_json()
         
-        # Similar to chart endpoint, but returns indicators dashboard
         symbol = data.get('symbol', '').upper()
         timeframe = data.get('timeframe', '1d')
         klines_count = data.get('klines', 100)
         data_source = data.get('source', DEFAULT_DATA_SOURCE).lower()
         use_cache = data.get('cache', DEFAULT_CACHE_ENABLED)
         
-        # Get market data
         cache_key = f"{data_source}:{symbol}:{timeframe}:{klines_count}"
         if use_cache:
             cached_data = data_cache.get(cache_key)
@@ -628,15 +621,13 @@ def technical_indicators_dashboard():
             return jsonify({'error': 'Invalid market data'}), 502
         
         prices = list(market_data['prices'][-klines_count:])
-        highs = market_data['highs']
-        lows = market_data['lows']
+        highs = market_data['highs'][-klines_count:]
+        lows = market_data['lows'][-klines_count:]
         
-        # Use only completed candles
         indicator_prices = prices[:-1] if len(prices) > 1 else prices
-        indicator_highs = highs[-len(indicator_prices):]
-        indicator_lows = lows[-len(indicator_prices):]
+        indicator_highs = highs[-len(indicator_prices):] if len(highs) >= len(indicator_prices) else highs
+        indicator_lows = lows[-len(indicator_prices):] if len(lows) >= len(indicator_prices) else lows
         
-        # Calculate indicators
         indicators = {
             'RSI': TechnicalIndicators.calculate_rsi(indicator_prices),
             'MACD': TechnicalIndicators.calculate_macd(indicator_prices),
@@ -645,7 +636,6 @@ def technical_indicators_dashboard():
             'Volatility': TechnicalIndicators.calculate_volatility(indicator_prices)
         }
         
-        # Generate dashboard
         html = ChartGenerator.generate_technical_chart(indicators)
         
         logger.info(f'Indicators dashboard generated: {symbol}')
@@ -684,7 +674,6 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'version': MODEL_CONFIG['version'],
-        'data_sources': ['binance', 'yfinance'],
         'timestamp': datetime.now().isoformat()
     }), 200
 
@@ -694,27 +683,10 @@ def index():
     return jsonify({
         'name': 'CPB Crypto Predictor Web',
         'version': 'V6.2',
-        'description': 'Advanced cryptocurrency price prediction API with real-time data',
-        'data_sources': ['Binance API', 'yfinance'],
-        'endpoints': {
-            'predict': '/api/v6/predict',
-            'chart': '/api/v6/chart',
-            'indicators': '/api/v6/indicators',
-            'symbols': '/api/v6/symbols',
-            'config': '/api/v6/config',
-            'health': '/api/v6/health'
-        }
+        'description': 'Advanced cryptocurrency price prediction API'
     }), 200
 
 if __name__ == '__main__':
     logger.info('Starting CPB Crypto Predictor V6.2 API Server')
-    logger.info(f'Model Config: {MODEL_CONFIG}')
-    logger.info(f'Default Data Source: {DEFAULT_DATA_SOURCE}')
-    logger.info(f'Cache Enabled: {DEFAULT_CACHE_ENABLED}')
-    logger.info('MODEL IMPROVEMENTS:')
-    logger.info('- Deterministic (no randomness)')
-    logger.info('- Reduced sensitivity to noise')
-    logger.info('- Mean reversion component')
-    logger.info('- Volatility adjustment')
-    logger.info('- Only meaningful signals (>0.5% change)')
+    logger.info('Data consistency check enabled')
     app.run(host='localhost', port=8001, debug=True)
